@@ -10,7 +10,8 @@ import { Device } from './modules/devices/entities/device.entity';
 import { Conversation } from './modules/conversations/entities/conversation.entity';
 import { ConversationMessage } from './modules/conversations/entities/conversation-message.entity';
 import { AIAgent } from './modules/ai-agent/entities/ai-agent.entity';
-import { Admin } from './modules/auth/entities/admin.entity';
+import { User } from './modules/auth/entities/user.entity';
+import { Organization } from './modules/auth/entities/organization.entity';
 import { ChatHistory } from './modules/chat-history/entities/chat-history.entity';
 import { DevicesModule } from './modules/devices/devices.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
@@ -38,7 +39,7 @@ import { MediaModule } from './modules/media/media.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [Device, Conversation, ConversationMessage, AIAgent, ChatHistory, Admin],
+        entities: [Device, Conversation, ConversationMessage, AIAgent, ChatHistory, User, Organization],
         synchronize: config.get('app.env') === 'development',
         logging: config.get('app.env') === 'development',
       }),

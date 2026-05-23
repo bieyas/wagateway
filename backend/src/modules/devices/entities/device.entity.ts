@@ -1,5 +1,6 @@
-import { Entity, Column, BeforeInsert } from 'typeorm';
+import { Entity, Column, BeforeInsert, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../../common/entities/base.entity';
+import { Organization } from '../../auth/entities/organization.entity';
 import { randomBytes } from 'crypto';
 
 export enum DeviceStatus {
@@ -52,6 +53,13 @@ export class Device extends BaseEntity {
 
   @Column({ type: 'enum', enum: WhatsAppEngine, default: WhatsAppEngine.BAILEYS })
   engine: WhatsAppEngine;
+
+  @Column({ nullable: true })
+  organizationId: string;
+
+  @ManyToOne(() => Organization, { nullable: true, onDelete: 'SET NULL', eager: false })
+  @JoinColumn({ name: 'organizationId' })
+  organization: Organization;
 
   @BeforeInsert()
   generateToken() {

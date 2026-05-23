@@ -1,5 +1,6 @@
-import { Entity, Column, OneToMany, Index } from 'typeorm';
+import { Entity, Column, OneToMany, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../../common/entities/base.entity';
+import { Organization } from '../../auth/entities/organization.entity';
 import { ConversationMessage } from './conversation-message.entity';
 
 export enum ConversationStatus {
@@ -15,6 +16,13 @@ export class Conversation extends BaseEntity {
   @Column()
   @Index()
   deviceId: string;
+
+  @Column({ nullable: true })
+  organizationId: string;
+
+  @ManyToOne(() => Organization, { nullable: true, onDelete: 'SET NULL', eager: false })
+  @JoinColumn({ name: 'organizationId' })
+  organization: Organization;
 
   @Column()
   phone: string;

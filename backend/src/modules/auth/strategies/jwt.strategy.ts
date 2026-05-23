@@ -4,20 +4,22 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Admin } from '../entities/admin.entity';
+import { User } from '../entities/user.entity';
 
 export interface JwtPayload {
   sub: string;
   username: string;
+  email: string;
   role: string;
+  organizationId: string | null;
 }
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private readonly configService: ConfigService,
-    @InjectRepository(Admin)
-    private readonly adminRepo: Repository<Admin>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -26,9 +28,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: JwtPayload): Promise<Admin> {
-    const admin = await this.adminRepo.findOne({ where: { id: payload.sub } });
-    if (!admin) throw new UnauthorizedException();
-    return admin;
+  async validate(payload: JwtPayload): Promise<User> {
+    const user = await this.userRepo.findOne({ where: { id: payload.sub, isActive: true } });
+    if (!user) throw new UnauthorizedException();
+    return user;
   }
 }

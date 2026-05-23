@@ -1,6 +1,7 @@
 import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../../common/entities/base.entity';
 import { Device } from '../../devices/entities/device.entity';
+import { Organization } from '../../auth/entities/organization.entity';
 
 @Entity('ai_agents')
 export class AIAgent extends BaseEntity {
@@ -11,6 +12,13 @@ export class AIAgent extends BaseEntity {
   @ManyToOne(() => Device, { onDelete: 'CASCADE', nullable: true, eager: false })
   @JoinColumn({ name: 'deviceId', referencedColumnName: 'deviceId' })
   device: Device;
+
+  @Column({ nullable: true })
+  organizationId: string;
+
+  @ManyToOne(() => Organization, { nullable: true, onDelete: 'SET NULL', eager: false })
+  @JoinColumn({ name: 'organizationId' })
+  organization: Organization;
 
   @Column({ default: false })
   enabled: boolean;

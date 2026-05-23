@@ -1,9 +1,11 @@
 import {
   Controller, Get, Put, Post, Delete,
-  Param, Body, UseGuards,
+  Param, Body, UseGuards, Request,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OrganizationGuard } from '../auth/guards/organization.guard';
+import { UserRole } from '../auth/entities/user.entity';
 import { DevicesService } from '../devices/devices.service';
 import { AIAgentService } from '../ai-agent/ai-agent.service';
 import { UpdateAIAgentDto } from '../ai-agent/dto/update-ai-agent.dto';
@@ -13,7 +15,7 @@ import { successResponse } from '../../common/utils/response.util';
 
 @ApiTags('Dashboard')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, OrganizationGuard)
 @Controller('dashboard')
 export class DashboardController {
   constructor(
@@ -21,10 +23,16 @@ export class DashboardController {
     private readonly aiAgentService: AIAgentService,
   ) {}
 
+  private orgId(req: any): string | undefined {
+    const user = req.user;
+    // Superadmin sees all (no filter), others scoped to their org
+    return user?.role === UserRole.SUPERADMIN ? undefined : user?.organizationId;
+  }
+
   @Get('devices')
-  @ApiOperation({ summary: 'List all devices' })
-  async listDevices() {
-    const devices = await this.devicesService.findAll();
+  @ApiOperation({ summary: 'List devices (scoped to tenant)' })
+  async listDevices(@Request() req: any) {
+    const devices = await this.devicesService.findAll(this.orgId(req));
     return successResponse(devices.map((d) => ({
       id: d.id,
       deviceId: d.deviceId,
@@ -42,9 +50,9 @@ export class DashboardController {
   }
 
   @Post('devices')
-  @ApiOperation({ summary: 'Create a new device' })
-  async createDevice(@Body() dto: CreateDeviceDto) {
-    const device = await this.devicesService.create(dto);
+  @ApiOperation({ summary: 'Create a new device (assigned to tenant)' })
+  async createDevice(@Request() req: any, @Body() dto: CreateDeviceDto) {
+    const device = await this.devicesService.create(dto, this.orgId(req));
     return successResponse({
       id: device.id,
       deviceId: device.deviceId,
@@ -56,36 +64,36 @@ export class DashboardController {
 
   @Put('devices/:deviceId')
   @ApiOperation({ summary: 'Update device' })
-  async updateDevice(@Param('deviceId') deviceId: string, @Body() dto: UpdateDeviceDto) {
-    const device = await this.devicesService.update(deviceId, dto);
+  async updateDevice(@Request() req: any, @Param('deviceId') deviceId: string, @Body() dto: UpdateDeviceDto) {
+    const device = await this.devicesService.update(deviceId, dto, this.orgId(req));
     return successResponse(device);
   }
 
   @Delete('devices/:deviceId')
   @ApiOperation({ summary: 'Delete device' })
-  async deleteDevice(@Param('deviceId') deviceId: string) {
-    await this.devicesService.remove(deviceId);
+  async deleteDevice(@Request() req: any, @Param('deviceId') deviceId: string) {
+    await this.devicesService.remove(deviceId, this.orgId(req));
     return successResponse(null, 'Device dihapus');
   }
 
   @Post('devices/:deviceId/connect')
   @ApiOperation({ summary: 'Connect device' })
-  async connect(@Param('deviceId') deviceId: string) {
-    const result = await this.devicesService.connect(deviceId);
+  async connect(@Request() req: any, @Param('deviceId') deviceId: string) {
+    const result = await this.devicesService.connect(deviceId, this.orgId(req));
     return successResponse(result);
   }
 
   @Post('devices/:deviceId/disconnect')
   @ApiOperation({ summary: 'Disconnect device' })
-  async disconnect(@Param('deviceId') deviceId: string) {
-    const result = await this.devicesService.disconnect(deviceId);
+  async disconnect(@Request() req: any, @Param('deviceId') deviceId: string) {
+    const result = await this.devicesService.disconnect(deviceId, this.orgId(req));
     return successResponse(result);
   }
 
   @Get('devices/:deviceId/qr')
   @ApiOperation({ summary: 'Get QR code for device' })
-  async getQr(@Param('deviceId') deviceId: string) {
-    const result = await this.devicesService.getQrCode(deviceId);
+  async getQr(@Request() req: any, @Param('deviceId') deviceId: string) {
+    const result = await this.devicesService.getQrCode(deviceId, this.orgId(req));
     return successResponse(result);
   }
 
@@ -152,5 +160,32 @@ export class DashboardController {
   async removeWhitelist(@Param('deviceId') deviceId: string, @Param('phone') phone: string) {
     await this.aiAgentService.removeFromWhitelist(deviceId, phone);
     return successResponse(this.aiAgentService.getWhitelistStatus(deviceId), `${phone} dihapus dari whitelist`);
+  }
+
+  @Get('devices/:deviceId/ai-agent/groups')
+  @ApiOperation({ summary: 'Get group handling config for device' })
+  async getGroupConfig(@Param('deviceId') deviceId: string) {
+    const agent = await this.aiAgentService.getConfig(deviceId);
+    return successResponse({
+      groupEnabled: agent?.groupEnabled ?? false,
+      allowedGroups: agent?.allowedGroups ?? [],
+      groupMentionOnly: agent?.groupMentionOnly ?? true,
+      groupPrefix: agent?.groupPrefix ?? null,
+    });
+  }
+
+  @Put('devices/:deviceId/ai-agent/groups')
+  @ApiOperation({ summary: 'Update group handling config for device' })
+  async updateGroupConfig(
+    @Param('deviceId') deviceId: string,
+    @Body() body: { groupEnabled?: boolean; allowedGroups?: string[]; groupMentionOnly?: boolean; groupPrefix?: string },
+  ) {
+    const agent = await this.aiAgentService.updateGroupConfig(deviceId, body);
+    return successResponse({
+      groupEnabled: agent.groupEnabled,
+      allowedGroups: agent.allowedGroups ?? [],
+      groupMentionOnly: agent.groupMentionOnly,
+      groupPrefix: agent.groupPrefix ?? null,
+    }, 'Konfigurasi grup diperbarui');
   }
 }

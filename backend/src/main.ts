@@ -30,10 +30,10 @@ async function bootstrap() {
   SwaggerModule.setup('docs', app, document);
 
   const authService = app.get(AuthService);
-  const hasAdmin = await authService.hasAnyAdmin();
-  if (!hasAdmin) {
-    await authService.createAdmin('admin', 'admin123');
-    console.log('👤 Default admin created: admin / admin123 (segera ganti password!)');
+  const hasUser = await authService.hasAnyUser();
+  if (!hasUser) {
+    await authService.createSuperadmin('admin@localhost', 'admin123');
+    console.log('👤 Default superadmin created: admin@localhost / admin123 (segera ganti password!)');
   }
 
   const port = process.env.APP_PORT || 3000;
