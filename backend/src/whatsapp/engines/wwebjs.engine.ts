@@ -105,6 +105,18 @@ export class WWebJSEngine implements IWhatsAppEngine {
         const msgType = msg.type === 'chat' ? 'text' : msg.type;
         const isMedia = msg.hasMedia && ['image', 'video', 'audio', 'document', 'ptt'].includes(msg.type);
 
+        let groupName: string | undefined;
+        let mentionedIds: string[] = [];
+        if (isGroup) {
+          try {
+            const chat = await msg.getChat();
+            groupName = chat.name;
+          } catch (_) {}
+          try {
+            mentionedIds = (await msg.getMentions()).map((c: any) => c.id?.user || c.id?._serialized || '').filter(Boolean);
+          } catch (_) {}
+        }
+
         let mediaUrl: string | undefined;
         if (isMedia) {
           try {
@@ -135,6 +147,8 @@ export class WWebJSEngine implements IWhatsAppEngine {
           type: msg.type === 'ptt' ? 'audio' : msgType,
           isGroup,
           groupId: isGroup ? phone : undefined,
+          groupName,
+          mentionedIds,
           mediaUrl,
           whatsappMessageId: msg.id._serialized,
           timestamp: msg.timestamp,

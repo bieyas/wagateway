@@ -80,6 +80,8 @@ export const aiApi = {
   setDevMode: (deviceId: string, devMode: boolean) => dashApi.put(`/devices/${deviceId}/ai-agent/whitelist/mode`, { devMode }),
   addWhitelist: (deviceId: string, phone: string) => dashApi.post(`/devices/${deviceId}/ai-agent/whitelist`, { phone }),
   removeWhitelist: (deviceId: string, phone: string) => dashApi.delete(`/devices/${deviceId}/ai-agent/whitelist/${phone}`),
+  getGroupConfig: (deviceId: string) => dashApi.get(`/devices/${deviceId}/ai-agent/groups`),
+  updateGroupConfig: (deviceId: string, data: object) => dashApi.put(`/devices/${deviceId}/ai-agent/groups`, data),
 }
 
 // --- Messages ---

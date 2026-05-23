@@ -151,6 +151,38 @@ export class AIAgentService implements OnModuleInit {
     }
   }
 
+  async updateGroupConfig(deviceId: string, dto: {
+    groupEnabled?: boolean;
+    allowedGroups?: string[];
+    groupMentionOnly?: boolean;
+    groupPrefix?: string;
+  }): Promise<AIAgent> {
+    let agent = await this.agentRepo.findOne({ where: { deviceId } });
+    if (!agent) agent = this.agentRepo.create({ deviceId });
+    if (dto.groupEnabled !== undefined) agent.groupEnabled = dto.groupEnabled;
+    if (dto.allowedGroups !== undefined) agent.allowedGroups = dto.allowedGroups;
+    if (dto.groupMentionOnly !== undefined) agent.groupMentionOnly = dto.groupMentionOnly;
+    if (dto.groupPrefix !== undefined) agent.groupPrefix = dto.groupPrefix;
+    return this.agentRepo.save(agent);
+  }
+
+  private isBotMentioned(payload: WhatsAppMessage, devicePhone: string): boolean {
+    if (payload.mentionedIds?.length) {
+      return payload.mentionedIds.some((id) => id === devicePhone || id.startsWith(devicePhone));
+    }
+    return false;
+  }
+
+  private hasGroupPrefix(message: string, prefix: string): boolean {
+    if (!prefix) return false;
+    return message.trim().toLowerCase().startsWith(prefix.toLowerCase());
+  }
+
+  private stripGroupPrefix(message: string, prefix: string): string {
+    if (!prefix || !message.trim().toLowerCase().startsWith(prefix.toLowerCase())) return message;
+    return message.trim().slice(prefix.length).trim();
+  }
+
   @OnEvent('lid.mapping')
   handleLidMapping(payload: { deviceId: string; lid: string; phoneNumber: string }): void {
     this.registerLidMapping(payload.deviceId, payload.lid, payload.phoneNumber);
@@ -207,23 +239,83 @@ export class AIAgentService implements OnModuleInit {
       }
       this.logger.log(`[INCOMING] Device found: ${device.deviceId}, status: ${device.status}`);
 
-      // Always save message to conversation so CS can see it regardless of whitelist
-      const isHuman = await this.conversationsService.isHumanTakeover(payload.deviceId, resolvedPhone);
-      const conv = await this.conversationsService.findOrCreate(
-        payload.deviceId,
-        resolvedPhone,
-        payload.senderName,
-      );
-      await this.conversationsService.addMessage(
-        conv.id,
-        MessageRole.USER,
-        payload.message || '',
-        0,
-        undefined,
-        payload.mediaUrl,
-        payload.type !== 'text' ? payload.type : undefined,
-      );
-      this.logger.log(`[INCOMING] Message saved to conversation ${conv.id}`);
+      // Group message handling
+      if (payload.isGroup) {
+        const agentCfg = await this.agentRepo.findOne({ where: { deviceId: payload.deviceId } });
+
+        // Always save to conversation so CS can see group messages
+        const groupConv = await this.conversationsService.findOrCreate(
+          payload.deviceId,
+          payload.groupId!,
+          payload.groupName || payload.groupId,
+        );
+        await this.conversationsService.addMessage(
+          groupConv.id,
+          MessageRole.USER,
+          payload.message || '',
+          0,
+          undefined,
+          payload.mediaUrl,
+          payload.type !== 'text' ? payload.type : undefined,
+        );
+        this.logger.log(`[GROUP] Message saved to conversation ${groupConv.id} (group: ${payload.groupName || payload.groupId})`);
+
+        if (!agentCfg?.groupEnabled) {
+          this.logger.log(`[GROUP] AI for groups disabled, skipping`);
+          return;
+        }
+
+        // Check allowed groups whitelist
+        if (agentCfg.allowedGroups?.length) {
+          const allowed = agentCfg.allowedGroups.some(
+            (g) => g === payload.groupId || g === payload.groupName,
+          );
+          if (!allowed) {
+            this.logger.log(`[GROUP] Group ${payload.groupId} not in allowed list, skipping AI`);
+            return;
+          }
+        }
+
+        // Check mention or prefix trigger
+        const devicePhone = device.phone || '';
+        const mentioned = this.isBotMentioned(payload, devicePhone);
+        const prefixed = agentCfg.groupPrefix
+          ? this.hasGroupPrefix(payload.message, agentCfg.groupPrefix)
+          : false;
+
+        if (agentCfg.groupMentionOnly && !mentioned && !prefixed) {
+          this.logger.log(`[GROUP] Bot not mentioned and no prefix, skipping AI`);
+          return;
+        }
+
+        // Strip prefix from message before sending to AI
+        if (prefixed && agentCfg.groupPrefix) {
+          payload = { ...payload, message: this.stripGroupPrefix(payload.message, agentCfg.groupPrefix) };
+        }
+
+        this.logger.log(`[GROUP] Trigger detected (mention=${mentioned}, prefix=${prefixed}), proceeding with AI`);
+        // Continue with AI processing below using groupId as phone target
+        resolvedPhone = payload.groupId!;
+      }
+
+      // Save message to conversation (group messages already saved above)
+      const isHuman = !payload.isGroup && await this.conversationsService.isHumanTakeover(payload.deviceId, resolvedPhone);
+      const conv = payload.isGroup
+        ? await this.conversationsService.findOrCreate(payload.deviceId, payload.groupId!, payload.groupName || payload.groupId)
+        : await this.conversationsService.findOrCreate(payload.deviceId, resolvedPhone, payload.senderName);
+
+      if (!payload.isGroup) {
+        await this.conversationsService.addMessage(
+          conv.id,
+          MessageRole.USER,
+          payload.message || '',
+          0,
+          undefined,
+          payload.mediaUrl,
+          payload.type !== 'text' ? payload.type : undefined,
+        );
+        this.logger.log(`[INCOMING] Message saved to conversation ${conv.id}`);
+      }
 
       // If human takeover, skip AI and stop here
       if (isHuman) {
@@ -248,7 +340,7 @@ export class AIAgentService implements OnModuleInit {
 
       if (!this.isWithinOperatingHours(agent)) {
         if (agent.outsideHoursMessage) {
-          await this.sendReply(device, resolvedPhone, agent.outsideHoursMessage, agent);
+          await this.sendReply(device, resolvedPhone, agent.outsideHoursMessage, agent, payload.isGroup);
         }
         return;
       }
@@ -259,7 +351,7 @@ export class AIAgentService implements OnModuleInit {
         this.logger.log(`[INCOMING] Handoff request detected!`);
         await this.conversationsService.escalate(payload.deviceId, resolvedPhone);
         const handoffMsg = 'Baik, saya akan hubungkan Anda dengan agen kami. Mohon tunggu sebentar ya 😊';
-        await this.sendReply(device, resolvedPhone, handoffMsg, agent);
+        await this.sendReply(device, resolvedPhone, handoffMsg, agent, payload.isGroup);
         await this.conversationsService.addMessage(conv.id, MessageRole.ASSISTANT, handoffMsg);
 
         if (agent.handoffWebhookUrl) {
@@ -317,7 +409,7 @@ export class AIAgentService implements OnModuleInit {
       }
 
       this.logger.log(`[INCOMING] Sending AI reply...`);
-      await this.sendReply(device, resolvedPhone, reply, agent);
+      await this.sendReply(device, resolvedPhone, reply, agent, payload.isGroup);
       this.logger.log(`[INCOMING] Reply sent successfully!`);
       
       await this.conversationsService.addMessage(conv.id, MessageRole.ASSISTANT, reply, tokenCount, agent.model);
@@ -329,7 +421,7 @@ export class AIAgentService implements OnModuleInit {
     }
   }
 
-  private async sendReply(device: Device, phone: string, message: string, agent: AIAgent): Promise<void> {
+  private async sendReply(device: Device, phone: string, message: string, agent: AIAgent, isGroup = false): Promise<void> {
     const maxRetries = 3;
     const retryDelayMs = 3000;
 
@@ -347,7 +439,7 @@ export class AIAgentService implements OnModuleInit {
         const messageId = await this.whatsappService.sendText(device.deviceId, {
           phone,
           message,
-          isGroup: false,
+          isGroup,
         });
 
         this.logger.log(`[AI REPLY] Message sent successfully. ID: ${messageId}`);

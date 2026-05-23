@@ -153,4 +153,36 @@ export class DashboardController {
     await this.aiAgentService.removeFromWhitelist(deviceId, phone);
     return successResponse(this.aiAgentService.getWhitelistStatus(deviceId), `${phone} dihapus dari whitelist`);
   }
+
+  @Get('devices/:deviceId/ai-agent/groups')
+  @ApiOperation({ summary: 'Get group handling config for device' })
+  async getGroupConfig(@Param('deviceId') deviceId: string) {
+    const agent = await this.aiAgentService.getConfig(deviceId);
+    return successResponse({
+      groupEnabled: agent?.groupEnabled ?? false,
+      allowedGroups: agent?.allowedGroups ?? [],
+      groupMentionOnly: agent?.groupMentionOnly ?? true,
+      groupPrefix: agent?.groupPrefix ?? null,
+    });
+  }
+
+  @Put('devices/:deviceId/ai-agent/groups')
+  @ApiOperation({ summary: 'Update group handling config for device' })
+  async updateGroupConfig(
+    @Param('deviceId') deviceId: string,
+    @Body() body: {
+      groupEnabled?: boolean;
+      allowedGroups?: string[];
+      groupMentionOnly?: boolean;
+      groupPrefix?: string;
+    },
+  ) {
+    const agent = await this.aiAgentService.updateGroupConfig(deviceId, body);
+    return successResponse({
+      groupEnabled: agent.groupEnabled,
+      allowedGroups: agent.allowedGroups ?? [],
+      groupMentionOnly: agent.groupMentionOnly,
+      groupPrefix: agent.groupPrefix ?? null,
+    }, 'Konfigurasi grup diperbarui');
+  }
 }

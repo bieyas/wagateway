@@ -74,4 +74,16 @@ export class AIAgent extends BaseEntity {
 
   @Column({ default: 8000 })
   maxTypingDelay: number;
+
+  @Column({ default: false })
+  groupEnabled: boolean;
+
+  @Column({ type: 'simple-array', nullable: true })
+  allowedGroups: string[];
+
+  @Column({ default: true })
+  groupMentionOnly: boolean;
+
+  @Column({ nullable: true })
+  groupPrefix: string;
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bot, Plus, Trash2, Save, Clock, Sparkles, Ban, ArrowLeft, FlaskConical, ShieldCheck } from 'lucide-react'
+import { Bot, Plus, Trash2, Save, Clock, Sparkles, Ban, ArrowLeft, FlaskConical, ShieldCheck, Users } from 'lucide-react'
 import { aiApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -16,6 +16,8 @@ export default function AIAgentPage() {
   const qc = useQueryClient()
   const [newBlPhone, setNewBlPhone] = useState('')
   const [newWlPhone, setNewWlPhone] = useState('')
+  const [newGroupId, setNewGroupId] = useState('')
+  const [groupPrefixInput, setGroupPrefixInput] = useState('')
   const [form, setForm] = useState<any>({
     enabled: false, persona: '', systemPrompt: '', model: 'gpt-4o',
     temperature: 0.7, operatingStart: '08:00', operatingEnd: '22:00',
@@ -41,14 +43,24 @@ export default function AIAgentPage() {
     queryFn: () => aiApi.getWhitelist(deviceId!),
     enabled: !!jwt && !!deviceId,
   })
+  const { data: grpRes, refetch: refetchGrp } = useQuery({
+    queryKey: ['ai-groups', deviceId],
+    queryFn: () => aiApi.getGroupConfig(deviceId!),
+    enabled: !!jwt && !!deviceId,
+  })
 
   const config = (configRes as any)?.data
   const blData = (blRes as any)?.data || { phones: [] }
   const wlData = (wlRes as any)?.data || { devMode: false, phones: [] }
+  const grpData = (grpRes as any)?.data || { groupEnabled: false, allowedGroups: [], groupMentionOnly: true, groupPrefix: '' }
 
   useEffect(() => {
     if (config) setForm((f: any) => ({ ...f, ...config }))
   }, [config])
+
+  useEffect(() => {
+    if (grpRes) setGroupPrefixInput((grpRes as any)?.data?.groupPrefix || '')
+  }, [grpRes])
 
   const saveMut = useMutation({
     mutationFn: () => aiApi.updateConfig(deviceId!, form),
@@ -80,6 +92,10 @@ export default function AIAgentPage() {
   const removeWlMut = useMutation({
     mutationFn: (phone: string) => aiApi.removeWhitelist(deviceId!, phone),
     onSuccess: () => refetchWl(),
+  })
+  const saveGrpMut = useMutation({
+    mutationFn: (data: object) => aiApi.updateGroupConfig(deviceId!, data),
+    onSuccess: () => refetchGrp(),
   })
 
   const set = (key: string, val: unknown) => setForm((f: any) => ({ ...f, [key]: val }))
@@ -269,6 +285,100 @@ export default function AIAgentPage() {
             </div>
           )}
         </CardContent>
+      </Card>
+
+      {/* Group Handling */}
+      <Card className={`border-2 transition-colors ${grpData.groupEnabled ? 'border-blue-300 bg-blue-50/20' : 'border-gray-100'}`}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Users className={`w-4 h-4 ${grpData.groupEnabled ? 'text-blue-500' : 'text-gray-400'}`} />
+              Penanganan Grup
+              {grpData.groupEnabled && <Badge variant="default" className="text-[10px] px-1.5 py-0.5 bg-blue-500">AKTIF</Badge>}
+            </CardTitle>
+            <button
+              onClick={() => saveGrpMut.mutate({ ...grpData, groupEnabled: !grpData.groupEnabled })}
+              disabled={saveGrpMut.isPending}
+              className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${grpData.groupEnabled ? 'bg-blue-500' : 'bg-gray-200'} ${saveGrpMut.isPending ? 'opacity-50' : ''}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${grpData.groupEnabled ? 'translate-x-5' : ''}`} />
+            </button>
+          </div>
+          <CardDescription className="text-xs mt-1">
+            AI membalas pesan di grup. Pesan grup selalu disimpan agar CS bisa melihat.
+          </CardDescription>
+        </CardHeader>
+
+        {grpData.groupEnabled && (
+          <CardContent className="space-y-4 pt-0">
+            {/* Mention only toggle */}
+            <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+              <div>
+                <p className="text-sm font-medium">Hanya reply jika di-mention atau ada prefix</p>
+                <p className="text-xs text-muted-foreground">AI diam jika tidak di-tag atau tidak ada trigger</p>
+              </div>
+              <button
+                onClick={() => saveGrpMut.mutate({ ...grpData, groupMentionOnly: !grpData.groupMentionOnly })}
+                className={`relative w-11 h-6 rounded-full transition-colors ${grpData.groupMentionOnly ? 'bg-blue-500' : 'bg-gray-300'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${grpData.groupMentionOnly ? 'translate-x-5' : ''}`} />
+              </button>
+            </div>
+
+            {/* Prefix trigger */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Prefix Trigger (opsional)</label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Contoh: !tanya atau /ai"
+                  value={groupPrefixInput}
+                  onChange={e => setGroupPrefixInput(e.target.value)}
+                  onBlur={() => saveGrpMut.mutate({ ...grpData, groupPrefix: groupPrefixInput })}
+                  className="text-sm"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">Pesan yang diawali prefix ini akan trigger AI, selain dari mention</p>
+            </div>
+
+            {/* Allowed groups */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">Grup yang Diizinkan (kosong = semua grup)</label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="ID atau nama grup"
+                  value={newGroupId}
+                  onChange={e => setNewGroupId(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && newGroupId) {
+                      saveGrpMut.mutate({ ...grpData, allowedGroups: [...(grpData.allowedGroups || []), newGroupId] })
+                      setNewGroupId('')
+                    }
+                  }}
+                />
+                <Button size="sm" variant="outline" loading={saveGrpMut.isPending}
+                  onClick={() => { if (newGroupId) { saveGrpMut.mutate({ ...grpData, allowedGroups: [...(grpData.allowedGroups || []), newGroupId] }); setNewGroupId('') } }}>
+                  <Plus className="w-4 h-4" />
+                </Button>
+              </div>
+              {(!grpData.allowedGroups || grpData.allowedGroups.length === 0) ? (
+                <p className="text-xs text-muted-foreground text-center py-2">Semua grup diizinkan</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {grpData.allowedGroups.map((g: string) => (
+                    <div key={g} className="flex items-center justify-between px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 text-sm">
+                      <span className="font-mono text-xs text-blue-800">{g}</span>
+                      <button
+                        onClick={() => saveGrpMut.mutate({ ...grpData, allowedGroups: grpData.allowedGroups.filter((x: string) => x !== g) })}
+                        className="text-gray-400 hover:text-red-500">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        )}
       </Card>
 
       {/* Dev Mode */}

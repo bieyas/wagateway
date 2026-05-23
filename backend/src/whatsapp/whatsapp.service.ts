@@ -44,6 +44,7 @@ export interface WhatsAppMessage {
   isGroup: boolean;
   groupId?: string;
   groupName?: string;
+  mentionedIds?: string[];
   mediaUrl?: string;
   whatsappMessageId: string;
   timestamp: number;
