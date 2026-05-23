@@ -2,7 +2,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { ChatHistory, ChatType, MessageDirection } from './entities/chat-history.entity';
-import { WASocket, proto } from '@whiskeysockets/baileys';
+
+export interface IncomingMessageRaw {
+  key?: { remoteJid?: string | null; id?: string | null; fromMe?: boolean | null };
+  message?: {
+    conversation?: string | null;
+    extendedTextMessage?: { text?: string | null } | null;
+    imageMessage?: { caption?: string | null } | null;
+    videoMessage?: { caption?: string | null } | null;
+    audioMessage?: Record<string, unknown> | null;
+    documentMessage?: { caption?: string | null } | null;
+  } | null;
+  messageTimestamp?: number | null;
+  pushName?: string | null;
+}
 
 export { MessageDirection };
 
@@ -15,47 +28,9 @@ export class ChatHistoryService {
     private readonly chatHistoryRepo: Repository<ChatHistory>,
   ) {}
 
-  /**
-   * Sync recent chats from Baileys socket
-   */
-  async syncRecentChats(deviceId: string, socket: WASocket, limit: number = 50): Promise<void> {
-    try {
-      this.logger.log(`Syncing recent chats for device ${deviceId}...`);
-      
-      // Fetch chats from Baileys store
-      const chats = await socket.groupFetchAllParticipating?.() || {};
-      const chatKeys = Object.keys(chats).slice(0, limit);
-      
-      for (const chatJid of chatKeys) {
-        await this.syncChatMessages(deviceId, socket, chatJid, 20);
-      }
-      
-      this.logger.log(`Synced ${chatKeys.length} chats for device ${deviceId}`);
-    } catch (error) {
-      this.logger.error(`Failed to sync chats for ${deviceId}: ${error.message}`);
-    }
-  }
-
-  /**
-   * Sync messages from a specific chat
-   */
-  async syncChatMessages(deviceId: string, socket: WASocket, chatJid: string, messageLimit: number = 20): Promise<void> {
-    try {
-      // Load messages from Baileys (if available in store)
-      // Note: Baileys doesn't provide direct history fetch API like whatsapp-web.js
-      // History comes through messages.upsert events after connection
-      this.logger.debug(`Chat sync requested for ${chatJid} - history comes via real-time events`);
-    } catch (error) {
-      this.logger.error(`Failed to sync chat ${chatJid}: ${error.message}`);
-    }
-  }
-
-  /**
-   * Store incoming/outgoing message to history
-   */
   async storeMessage(
     deviceId: string,
-    msg: proto.IWebMessageInfo,
+    msg: IncomingMessageRaw,
     direction: MessageDirection,
   ): Promise<ChatHistory> {
     try {

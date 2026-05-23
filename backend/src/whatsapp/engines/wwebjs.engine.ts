@@ -240,6 +240,21 @@ export class WWebJSEngine implements IWhatsAppEngine {
     }
   }
 
+  async disconnectAll(): Promise<void> {
+    for (const [deviceId] of this.clients.entries()) {
+      await this.disconnect(deviceId).catch(() => {});
+    }
+  }
+
+  async deleteSession(deviceId: string): Promise<void> {
+    await this.disconnect(deviceId);
+  }
+
+  async markAsRead(deviceId: string, _phone: string, _messageId: string): Promise<void> {
+    // WWebJS handles read receipts automatically; no-op here
+    void deviceId;
+  }
+
   async checkNumber(deviceId: string, phone: string): Promise<boolean> {
     const client = this.getClient(deviceId);
     const jid = this.resolveJid(phone, false);

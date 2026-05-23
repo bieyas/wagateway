@@ -24,7 +24,7 @@ export class CreateDeviceDto {
   @Max(10000)
   messageDelay?: number;
 
-  @ApiProperty({ required: false, enum: WhatsAppEngine, default: WhatsAppEngine.BAILEYS })
+  @ApiProperty({ required: false, enum: WhatsAppEngine, default: WhatsAppEngine.WWEBJS })
   @IsOptional()
   @IsEnum(WhatsAppEngine)
   engine?: WhatsAppEngine;

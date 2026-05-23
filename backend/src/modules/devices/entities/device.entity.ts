@@ -12,7 +12,6 @@ export enum DeviceStatus {
 }
 
 export enum WhatsAppEngine {
-  BAILEYS = 'baileys',
   WWEBJS = 'wwebjs',
 }
 
@@ -51,7 +50,7 @@ export class Device extends BaseEntity {
   @Column({ default: 1000 })
   quotaLimit: number;
 
-  @Column({ type: 'enum', enum: WhatsAppEngine, default: WhatsAppEngine.BAILEYS })
+  @Column({ type: 'enum', enum: WhatsAppEngine, default: WhatsAppEngine.WWEBJS })
   engine: WhatsAppEngine;
 
   @Column({ nullable: true })
