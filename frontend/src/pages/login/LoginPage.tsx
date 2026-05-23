@@ -19,8 +19,8 @@ export default function LoginPage() {
     setError('')
     try {
       const res = await authApi.login(username.trim(), password) as any
-      const { accessToken, admin } = res.data
-      setAuth(accessToken, admin.username)
+      const { accessToken, user } = res.data
+      setAuth(accessToken, user.username || user.email, user.email, user.role, user.organizationId)
       // Auto-set first device token so chatApi and dashboardApi work immediately
       try {
         const devRes = await deviceApi.list() as any
@@ -155,8 +155,12 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-6 pt-6 border-t border-gray-100 text-center">
-            <p className="text-xs text-gray-400">Default: <span className="font-mono font-medium text-gray-600">admin / admin123</span></p>
+          <div className="mt-6 pt-6 border-t border-gray-100 text-center space-y-2">
+            <p className="text-xs text-gray-400">Default: <span className="font-mono font-medium text-gray-600">admin@localhost / admin123</span></p>
+            <p className="text-xs text-gray-400">
+              Belum punya akun?{' '}
+              <a href="/register" className="text-emerald-600 font-medium hover:underline">Daftarkan organisasi</a>
+            </p>
           </div>
         </div>
       </div>

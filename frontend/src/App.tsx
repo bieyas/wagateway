@@ -5,10 +5,12 @@ import { useAuthStore } from '@/store/auth.store'
 import { deviceApi } from '@/lib/api'
 import AppLayout from '@/components/layout/AppLayout'
 import LoginPage from '@/pages/login/LoginPage'
+import RegisterPage from '@/pages/register/RegisterPage'
 import DashboardPage from '@/pages/dashboard/DashboardPage'
 import DevicesPage from '@/pages/devices/DevicesPage'
 import ConversationsPage from '@/pages/conversations/ConversationsPage'
 import AIAgentPage from '@/pages/ai-agent/AIAgentPage'
+import TeamPage from '@/pages/team/TeamPage'
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 5000 } } })
 
@@ -35,11 +37,13 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
             <Route index element={<DashboardPage />} />
             <Route path="devices" element={<DevicesPage />} />
             <Route path="conversations" element={<ConversationsPage />} />
             <Route path="devices/:deviceId/ai-agent" element={<AIAgentPage />} />
+            <Route path="team" element={<TeamPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

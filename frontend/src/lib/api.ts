@@ -52,10 +52,33 @@ authClient.interceptors.response.use(
 
 export default api
 
+// Auth client with Bearer token
+const authDashClient = axios.create({ baseURL: API_BASE })
+authDashClient.interceptors.request.use((config) => {
+  const jwt = localStorage.getItem('wa_jwt') ||
+    (() => { try { const s = JSON.parse(localStorage.getItem('wa-auth') || '{}'); return s?.state?.jwt || '' } catch { return '' } })()
+  if (jwt) config.headers['Authorization'] = `Bearer ${jwt}`
+  return config
+})
+authDashClient.interceptors.response.use(
+  (res) => res.data,
+  (err) => {
+    if (err.response?.status === 401) handleUnauthorized()
+    return Promise.reject(err.response?.data || err)
+  },
+)
+
 // --- Auth ---
 export const authApi = {
   login: (username: string, password: string) =>
     authClient.post('/auth/login', { username, password }),
+  register: (data: { orgName: string; slug: string; email: string; password: string; fullName?: string }) =>
+    authClient.post('/auth/register', data),
+  me: () => authDashClient.get('/auth/me'),
+  listMembers: () => authDashClient.get('/auth/members'),
+  inviteMember: (data: { email: string; password: string; fullName?: string; role?: string }) =>
+    authDashClient.post('/auth/members', data),
+  removeMember: (userId: string) => authDashClient.delete(`/auth/members/${userId}`),
 }
 
 // --- Dashboard Device (JWT) ---
@@ -80,6 +103,8 @@ export const aiApi = {
   setDevMode: (deviceId: string, devMode: boolean) => dashApi.put(`/devices/${deviceId}/ai-agent/whitelist/mode`, { devMode }),
   addWhitelist: (deviceId: string, phone: string) => dashApi.post(`/devices/${deviceId}/ai-agent/whitelist`, { phone }),
   removeWhitelist: (deviceId: string, phone: string) => dashApi.delete(`/devices/${deviceId}/ai-agent/whitelist/${phone}`),
+  getGroupConfig: (deviceId: string) => dashApi.get(`/devices/${deviceId}/ai-agent/groups`),
+  updateGroupConfig: (deviceId: string, data: object) => dashApi.put(`/devices/${deviceId}/ai-agent/groups`, data),
 }
 
 // --- Messages ---

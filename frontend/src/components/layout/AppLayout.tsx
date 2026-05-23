@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Smartphone,
-  Users, LogOut, Menu, X, Wifi, ChevronRight, Download, Share,
+  Users, LogOut, Menu, X, Wifi, ChevronRight, Download, Share, UsersRound,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
@@ -11,18 +11,19 @@ const nav = [
   { to: '/',              icon: LayoutDashboard, label: 'Dashboard',     color: 'text-violet-600', bg: 'bg-violet-50' },
   { to: '/devices',       icon: Smartphone,      label: 'Devices',       color: 'text-sky-600',    bg: 'bg-sky-50' },
   { to: '/conversations', icon: Users,           label: 'Percakapan',    color: 'text-orange-600', bg: 'bg-orange-50' },
+  { to: '/team',          icon: UsersRound,      label: 'Tim',           color: 'text-indigo-600', bg: 'bg-indigo-50' },
 ]
 
 const pageTitles: Record<string, string> = {
   '/': 'Dashboard', '/devices': 'Devices',
-  '/conversations': 'Percakapan', '/ai-agent': 'AI Agent',
+  '/conversations': 'Percakapan', '/ai-agent': 'AI Agent', '/team': 'Manajemen Tim',
 }
 
 export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<any>(null)
   const [showIosHint, setShowIosHint] = useState(false)
-  const { username, clearAuth } = useAuthStore()
+  const { username, email, role, clearAuth } = useAuthStore()
   const navigate = useNavigate()
   const location = useLocation()
   const iosHintRef = useRef<HTMLDivElement>(null)
@@ -90,14 +91,14 @@ export default function AppLayout() {
           </button>
         </div>
 
-        {/* Admin chip */}
+        {/* User chip */}
         {username && (
           <div className="mx-4 mt-4 px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-100">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
               <div className="min-w-0">
-                <p className="text-xs font-semibold text-emerald-800 truncate">{username}</p>
-                <p className="text-[11px] text-emerald-500">Administrator</p>
+                <p className="text-xs font-semibold text-emerald-800 truncate">{email || username}</p>
+                <p className="text-[11px] text-emerald-500 capitalize">{role || 'User'}</p>
               </div>
             </div>
           </div>
