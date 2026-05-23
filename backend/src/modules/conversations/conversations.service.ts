@@ -25,6 +25,9 @@ export class ConversationsService {
           lastMessageAt: new Date(),
         }),
       );
+    } else if (contactName && (!conv.contactName || conv.contactName === conv.phone)) {
+      await this.convRepo.update(conv.id, { contactName });
+      conv.contactName = contactName;
     }
     return conv;
   }

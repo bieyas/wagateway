@@ -199,12 +199,12 @@ export class AIAgentService implements OnModuleInit {
       }
       this.logger.log(`[INCOMING] Device found: ${device.deviceId}, status: ${device.status}`);
 
-      const isHuman = await this.conversationsService.isHumanTakeover(payload.deviceId, payload.phone);
+      const isHuman = await this.conversationsService.isHumanTakeover(payload.deviceId, resolvedPhone);
       if (isHuman) {
-        this.logger.log(`[INCOMING] Human takeover active for ${payload.phone}, saving message and skipping AI`);
+        this.logger.log(`[INCOMING] Human takeover active for ${resolvedPhone}, saving message and skipping AI`);
         const convHuman = await this.conversationsService.findOrCreate(
           payload.deviceId,
-          payload.phone,
+          resolvedPhone,
           payload.senderName,
         );
         await this.conversationsService.addMessage(
@@ -221,14 +221,14 @@ export class AIAgentService implements OnModuleInit {
 
       if (!this.isWithinOperatingHours(agent)) {
         if (agent.outsideHoursMessage) {
-          await this.sendReply(device, payload.phone, agent.outsideHoursMessage, agent);
+          await this.sendReply(device, resolvedPhone, agent.outsideHoursMessage, agent);
         }
         return;
       }
 
       const conv = await this.conversationsService.findOrCreate(
         payload.deviceId,
-        payload.phone,
+        resolvedPhone,
         payload.senderName,
       );
       this.logger.log(`[INCOMING] Conversation ID: ${conv.id}`);
@@ -246,9 +246,9 @@ export class AIAgentService implements OnModuleInit {
 
       if (this.isHandoffRequest(payload.message, agent.handoffKeywords)) {
         this.logger.log(`[INCOMING] Handoff request detected!`);
-        await this.conversationsService.escalate(payload.deviceId, payload.phone);
+        await this.conversationsService.escalate(payload.deviceId, resolvedPhone);
         const handoffMsg = 'Baik, saya akan hubungkan Anda dengan agen kami. Mohon tunggu sebentar ya 😊';
-        await this.sendReply(device, payload.phone, handoffMsg, agent);
+        await this.sendReply(device, resolvedPhone, handoffMsg, agent);
         await this.conversationsService.addMessage(conv.id, MessageRole.ASSISTANT, handoffMsg);
 
         if (agent.handoffWebhookUrl) {
@@ -273,11 +273,11 @@ export class AIAgentService implements OnModuleInit {
       ];
       this.logger.log(`[INCOMING] OpenAI messages prepared: ${messages.length} items`);
 
-      await this.whatsappService.markAsRead(payload.deviceId, payload.phone, payload.whatsappMessageId);
+      await this.whatsappService.markAsRead(payload.deviceId, resolvedPhone, payload.whatsappMessageId);
 
       const typingDuration = this.calculateTypingDuration(payload.message.length, agent);
       this.logger.log(`[INCOMING] Typing duration: ${typingDuration}ms`);
-      const typingPromise = this.whatsappService.sendTyping(payload.deviceId, payload.phone, typingDuration);
+      const typingPromise = this.whatsappService.sendTyping(payload.deviceId, resolvedPhone, typingDuration);
 
       this.logger.log(`[OPENAI] Sending request to OpenAI...`);
       this.logger.log(`[OPENAI] Model: ${agent.model || 'gpt-4o'}`);
@@ -306,7 +306,7 @@ export class AIAgentService implements OnModuleInit {
       }
 
       this.logger.log(`[INCOMING] Sending AI reply...`);
-      await this.sendReply(device, payload.phone, reply, agent);
+      await this.sendReply(device, resolvedPhone, reply, agent);
       this.logger.log(`[INCOMING] Reply sent successfully!`);
       
       await this.conversationsService.addMessage(conv.id, MessageRole.ASSISTANT, reply, tokenCount, agent.model);
