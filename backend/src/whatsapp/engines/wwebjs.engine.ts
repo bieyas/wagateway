@@ -241,10 +241,10 @@ export class WWebJSEngine implements IWhatsAppEngine {
     return result.id._serialized;
   }
 
-  async sendTyping(deviceId: string, phone: string, durationMs: number): Promise<void> {
+  async sendTyping(deviceId: string, phone: string, durationMs: number, isGroup = false): Promise<void> {
     try {
       const client = this.getClient(deviceId);
-      const jid = this.resolveJid(phone, false);
+      const jid = this.resolveJid(phone, isGroup);
       const chat = await client.getChatById(jid);
       await chat.sendStateTyping();
       await new Promise((r) => setTimeout(r, durationMs));

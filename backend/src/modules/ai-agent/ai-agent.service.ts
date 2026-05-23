@@ -380,7 +380,7 @@ export class AIAgentService implements OnModuleInit {
 
       const typingDuration = this.calculateTypingDuration(payload.message.length, agent);
       this.logger.log(`[INCOMING] Typing duration: ${typingDuration}ms`);
-      const typingPromise = this.whatsappService.sendTyping(payload.deviceId, resolvedPhone, typingDuration);
+      const typingPromise = this.whatsappService.sendTyping(payload.deviceId, resolvedPhone, typingDuration, payload.isGroup);
 
       this.logger.log(`[OPENAI] Sending request to OpenAI...`);
       this.logger.log(`[OPENAI] Model: ${agent.model || 'gpt-4o'}`);
@@ -433,7 +433,7 @@ export class AIAgentService implements OnModuleInit {
 
         if (agent.simulateTyping) {
           const typingMs = this.calculateTypingDuration(message.length, agent);
-          await this.whatsappService.sendTyping(device.deviceId, phone, typingMs);
+          await this.whatsappService.sendTyping(device.deviceId, phone, typingMs, isGroup);
         }
 
         const messageId = await this.whatsappService.sendText(device.deviceId, {

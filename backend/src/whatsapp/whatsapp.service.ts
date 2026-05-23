@@ -467,15 +467,15 @@ export class WhatsAppService implements OnApplicationBootstrap, OnApplicationShu
     return result?.key?.id || '';
   }
 
-  async sendTyping(deviceId: string, phone: string, durationMs: number): Promise<void> {
+  async sendTyping(deviceId: string, phone: string, durationMs: number, isGroup = false): Promise<void> {
     const engine = await this.getDeviceEngine(deviceId);
     if (engine === WhatsAppEngine.WWEBJS) {
-      await this.wwebjsEngine.sendTyping(deviceId, phone, durationMs);
+      await this.wwebjsEngine.sendTyping(deviceId, phone, durationMs, isGroup);
       return;
     }
     const socket = this.sockets.get(deviceId);
     if (!socket) return;
-    const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+    const jid = phone.includes('@') ? phone : isGroup ? `${phone}@g.us` : `${phone}@s.whatsapp.net`;
     if (jid.endsWith('@lid')) return;
     try {
       await socket.sendPresenceUpdate('composing', jid);
