@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bot, Plus, Trash2, Save, Clock, Sparkles, Ban, ArrowLeft, FlaskConical, ShieldCheck, Users } from 'lucide-react'
+import { Bot, Plus, Trash2, Save, Clock, Sparkles, Ban, ArrowLeft, FlaskConical, ShieldCheck, Users, Brain } from 'lucide-react'
 import { aiApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -24,6 +24,8 @@ export default function AIAgentPage() {
     timezone: 'Asia/Jakarta', simulateTyping: true, alwaysOn: false,
     handoffKeywords: ['agen', 'manusia', 'cs', 'operator'],
     outsideHoursMessage: 'Maaf, kami sedang offline. Kami akan membalas pesan Anda segera.',
+    readDelay: true, readDelayMin: 1500, readDelayMax: 3500,
+    replyChunkEnabled: false, replyChunkMaxLength: 300,
   })
   const [saveSuccess, setSaveSuccess] = useState(false)
   const { jwt } = useAuthStore()
@@ -237,6 +239,106 @@ export default function AIAgentPage() {
               }}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Human Behavior */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Brain className="w-4 h-4 text-purple-500" />
+            Human Behavior
+          </CardTitle>
+          <CardDescription className="text-xs">Buat AI terasa lebih manusiawi saat membalas pesan</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-0">
+
+          {/* Simulate typing toggle */}
+          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+            <div>
+              <p className="text-sm font-medium">Indikator Mengetik</p>
+              <p className="text-xs text-muted-foreground">Tampilkan "sedang mengetik..." sebelum mengirim</p>
+            </div>
+            <button
+              onClick={() => set('simulateTyping', !form.simulateTyping)}
+              className={`relative w-11 h-6 rounded-full transition-colors ${form.simulateTyping ? 'bg-purple-500' : 'bg-gray-300'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.simulateTyping ? 'translate-x-5' : ''}`} />
+            </button>
+          </div>
+
+          {form.simulateTyping && (
+            <div className="grid grid-cols-3 gap-3 pl-1">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">ms/karakter</label>
+                <Input type="number" min={10} max={200} value={form.typingDelayPerChar ?? 50}
+                  onChange={e => set('typingDelayPerChar', parseInt(e.target.value))} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Min (ms)</label>
+                <Input type="number" min={0} step={100} value={form.minTypingDelay ?? 500}
+                  onChange={e => set('minTypingDelay', parseInt(e.target.value))} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Max (ms)</label>
+                <Input type="number" min={0} step={500} value={form.maxTypingDelay ?? 8000}
+                  onChange={e => set('maxTypingDelay', parseInt(e.target.value))} />
+              </div>
+            </div>
+          )}
+
+          {/* Read delay */}
+          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+            <div>
+              <p className="text-sm font-medium">Jeda Baca</p>
+              <p className="text-xs text-muted-foreground">Simulasi membaca pesan sebelum mulai mengetik</p>
+            </div>
+            <button
+              onClick={() => set('readDelay', !form.readDelay)}
+              className={`relative w-11 h-6 rounded-full transition-colors ${form.readDelay ? 'bg-purple-500' : 'bg-gray-300'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.readDelay ? 'translate-x-5' : ''}`} />
+            </button>
+          </div>
+
+          {form.readDelay && (
+            <div className="grid grid-cols-2 gap-3 pl-1">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Min jeda baca (ms)</label>
+                <Input type="number" min={0} step={100} value={form.readDelayMin ?? 1500}
+                  onChange={e => set('readDelayMin', parseInt(e.target.value))} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Max jeda baca (ms)</label>
+                <Input type="number" min={0} step={100} value={form.readDelayMax ?? 3500}
+                  onChange={e => set('readDelayMax', parseInt(e.target.value))} />
+              </div>
+            </div>
+          )}
+
+          {/* Multi-chunk reply */}
+          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+            <div>
+              <p className="text-sm font-medium">Pecah Balasan Panjang</p>
+              <p className="text-xs text-muted-foreground">Reply panjang dikirim bertahap seperti manusia mengetik</p>
+            </div>
+            <button
+              onClick={() => set('replyChunkEnabled', !form.replyChunkEnabled)}
+              className={`relative w-11 h-6 rounded-full transition-colors ${form.replyChunkEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.replyChunkEnabled ? 'translate-x-5' : ''}`} />
+            </button>
+          </div>
+
+          {form.replyChunkEnabled && (
+            <div className="space-y-1.5 pl-1">
+              <label className="text-xs font-medium text-muted-foreground">Panjang maksimal per pesan (karakter)</label>
+              <Input type="number" min={50} max={2000} step={50} value={form.replyChunkMaxLength ?? 300}
+                onChange={e => set('replyChunkMaxLength', parseInt(e.target.value))} />
+              <p className="text-[11px] text-muted-foreground">Reply akan dipecah per kalimat, maks ~{form.replyChunkMaxLength ?? 300} karakter per pesan</p>
+            </div>
+          )}
+
         </CardContent>
       </Card>
 

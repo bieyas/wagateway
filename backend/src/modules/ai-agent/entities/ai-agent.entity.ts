@@ -75,6 +75,21 @@ export class AIAgent extends BaseEntity {
   @Column({ default: 8000 })
   maxTypingDelay: number;
 
+  @Column({ default: true })
+  readDelay: boolean;
+
+  @Column({ default: 1500 })
+  readDelayMin: number;
+
+  @Column({ default: 3500 })
+  readDelayMax: number;
+
+  @Column({ default: false })
+  replyChunkEnabled: boolean;
+
+  @Column({ default: 300 })
+  replyChunkMaxLength: number;
+
   @Column({ default: false })
   groupEnabled: boolean;
 

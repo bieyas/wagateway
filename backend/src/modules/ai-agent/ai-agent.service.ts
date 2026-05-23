@@ -376,15 +376,18 @@ export class AIAgentService implements OnModuleInit {
       ];
       this.logger.log(`[INCOMING] OpenAI messages prepared: ${messages.length} items`);
 
+      // 1. Mark as read
       await this.whatsappService.markAsRead(payload.deviceId, resolvedPhone, payload.whatsappMessageId);
 
-      const typingDuration = this.calculateTypingDuration(payload.message.length, agent);
-      this.logger.log(`[INCOMING] Typing duration: ${typingDuration}ms`);
-      const typingPromise = this.whatsappService.sendTyping(payload.deviceId, resolvedPhone, typingDuration, payload.isGroup);
+      // 2. Read delay — simulate human reading the message before starting to type
+      if (agent.readDelay) {
+        const readMs = this.randomInt(agent.readDelayMin ?? 1500, agent.readDelayMax ?? 3500);
+        this.logger.log(`[HUMAN] Read delay: ${readMs}ms`);
+        await new Promise((r) => setTimeout(r, readMs));
+      }
 
       this.logger.log(`[OPENAI] Sending request to OpenAI...`);
       this.logger.log(`[OPENAI] Model: ${agent.model || 'gpt-4o'}`);
-      this.logger.log(`[OPENAI] Temperature: ${agent.temperature}, MaxTokens: ${agent.maxTokens}`);
       
       const completion = await this.openai.chat.completions.create({
         model: agent.model || 'gpt-4o',
@@ -392,15 +395,11 @@ export class AIAgentService implements OnModuleInit {
         temperature: agent.temperature,
         max_tokens: agent.maxTokens,
       });
-      
-      this.logger.log(`[OPENAI] Response received!`);
-
-      await typingPromise;
 
       const reply = completion.choices[0]?.message?.content || '';
       const tokenCount = completion.usage?.total_tokens || 0;
       
-      this.logger.log(`[OPENAI] Reply content: "${reply.substring(0, 100)}..."`);
+      this.logger.log(`[OPENAI] Reply (${reply.length} chars): "${reply.substring(0, 100)}..."`);
       this.logger.log(`[OPENAI] Token count: ${tokenCount}`);
 
       if (!reply) {
@@ -425,32 +424,50 @@ export class AIAgentService implements OnModuleInit {
     const maxRetries = 3;
     const retryDelayMs = 3000;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await this.whatsappService.waitUntilConnected(device.deviceId, 12000);
+    // Split into chunks if enabled
+    const chunks: string[] = agent.replyChunkEnabled && (agent.replyChunkMaxLength ?? 300) > 0
+      ? this.splitIntoChunks(message, agent.replyChunkMaxLength ?? 300)
+      : [message];
 
-        this.logger.log(`[AI REPLY] Sending to ${phone} (attempt ${attempt}/${maxRetries}): "${message.substring(0, 50)}..."`);
+    this.logger.log(`[AI REPLY] Sending ${chunks.length} chunk(s) to ${phone}`);
 
-        if (agent.simulateTyping) {
-          const typingMs = this.calculateTypingDuration(message.length, agent);
-          await this.whatsappService.sendTyping(device.deviceId, phone, typingMs, isGroup);
-        }
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
 
-        const messageId = await this.whatsappService.sendText(device.deviceId, {
-          phone,
-          message,
-          isGroup,
-        });
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await this.whatsappService.waitUntilConnected(device.deviceId, 12000);
 
-        this.logger.log(`[AI REPLY] Message sent successfully. ID: ${messageId}`);
-        return;
-      } catch (error) {
-        this.logger.error(`[AI REPLY] Attempt ${attempt}/${maxRetries} failed to send to ${phone}: ${error.message}`);
-        if (attempt < maxRetries) {
-          this.logger.log(`[AI REPLY] Retrying in ${retryDelayMs}ms...`);
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-        } else {
-          throw error;
+          this.logger.log(`[AI REPLY] Chunk ${ci + 1}/${chunks.length} (attempt ${attempt}): "${chunk.substring(0, 50)}..."`);
+
+          // Typing indicator based on this chunk's length (not input message length)
+          if (agent.simulateTyping) {
+            const typingMs = this.calculateTypingDuration(chunk.length, agent);
+            await this.whatsappService.sendTyping(device.deviceId, phone, typingMs, isGroup);
+          }
+
+          const messageId = await this.whatsappService.sendText(device.deviceId, {
+            phone,
+            message: chunk,
+            isGroup,
+          });
+
+          this.logger.log(`[AI REPLY] Chunk ${ci + 1} sent. ID: ${messageId}`);
+
+          // Short pause between chunks to feel more natural
+          if (ci < chunks.length - 1) {
+            const pauseMs = this.randomInt(800, 1800);
+            this.logger.log(`[HUMAN] Inter-chunk pause: ${pauseMs}ms`);
+            await new Promise((r) => setTimeout(r, pauseMs));
+          }
+          break;
+        } catch (error) {
+          this.logger.error(`[AI REPLY] Chunk ${ci + 1}, attempt ${attempt}/${maxRetries} failed: ${error.message}`);
+          if (attempt < maxRetries) {
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          } else {
+            throw error;
+          }
         }
       }
     }
@@ -476,8 +493,31 @@ export class AIAgentService implements OnModuleInit {
   }
 
   private calculateTypingDuration(replyLength: number, agent: AIAgent): number {
-    const duration = replyLength * agent.typingDelayPerChar;
-    return Math.min(Math.max(duration, agent.minTypingDelay), agent.maxTypingDelay);
+    const base = replyLength * agent.typingDelayPerChar;
+    const clamped = Math.min(Math.max(base, agent.minTypingDelay), agent.maxTypingDelay);
+    // ±20% random jitter for natural feel
+    const jitter = 0.8 + Math.random() * 0.4;
+    return Math.round(clamped * jitter);
+  }
+
+  private randomInt(min: number, max: number): number {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  private splitIntoChunks(text: string, maxLength: number): string[] {
+    const sentences = text.split(/(?<=[.?!])\s+|(?<=\n)/);
+    const chunks: string[] = [];
+    let current = '';
+    for (const sentence of sentences) {
+      if ((current + sentence).length > maxLength && current.trim()) {
+        chunks.push(current.trim());
+        current = sentence;
+      } else {
+        current += (current ? ' ' : '') + sentence;
+      }
+    }
+    if (current.trim()) chunks.push(current.trim());
+    return chunks.filter(c => c.length > 0);
   }
 
   private buildDefaultSystemPrompt(persona: string): string {
@@ -552,6 +592,11 @@ Balasan harus singkat, jelas, dan tidak bertele-tele. Gunakan emoji secukupnya a
     if (dto.typingDelayPerChar !== undefined) agent.typingDelayPerChar = dto.typingDelayPerChar;
     if (dto.minTypingDelay !== undefined) agent.minTypingDelay = dto.minTypingDelay;
     if (dto.maxTypingDelay !== undefined) agent.maxTypingDelay = dto.maxTypingDelay;
+    if (dto.readDelay !== undefined) agent.readDelay = dto.readDelay;
+    if (dto.readDelayMin !== undefined) agent.readDelayMin = dto.readDelayMin;
+    if (dto.readDelayMax !== undefined) agent.readDelayMax = dto.readDelayMax;
+    if (dto.replyChunkEnabled !== undefined) agent.replyChunkEnabled = dto.replyChunkEnabled;
+    if (dto.replyChunkMaxLength !== undefined) agent.replyChunkMaxLength = dto.replyChunkMaxLength;
     return this.agentRepo.save(agent);
   }
 }
