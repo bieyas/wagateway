@@ -95,10 +95,12 @@ export class WWebJSEngine implements IWhatsAppEngine {
         const isGroup = msg.from.endsWith('@g.us');
         const phone = msg.from.replace(/@(c\.us|lid|g\.us)$/, '');
 
-        const contactNumber: string | undefined = (contact as any).number || (contact as any).id?.user;
-        const senderPn = isLid && contactNumber && !contactNumber.endsWith('@lid')
-          ? contactNumber.replace(/@(c\.us|s\.whatsapp\.net)$/, '')
+        // For LID contacts: real phone is in contact.id.user (e.g. "6281228240369@c.us" → "6281228240369")
+        // contact.number for LID contacts returns the LID itself, not the phone number
+        const senderPn = isLid && (contact as any).id?.user
+          ? String((contact as any).id.user).replace(/@(c\.us|s\.whatsapp\.net)$/, '')
           : undefined;
+
 
         const msgType = msg.type === 'chat' ? 'text' : msg.type;
         const isMedia = msg.hasMedia && ['image', 'video', 'audio', 'document', 'ptt'].includes(msg.type);
@@ -117,6 +119,11 @@ export class WWebJSEngine implements IWhatsAppEngine {
           } catch (err) {
             this.logger.warn(`[WWebJS][MEDIA] Failed to download media: ${err.message}`);
           }
+        }
+
+        // If LID contact has a real phone number, emit mapping for whitelist resolution
+        if (isLid && senderPn && senderPn !== phone) {
+          this.eventEmitter.emit('lid.mapping', { deviceId, lid: phone, phoneNumber: senderPn });
         }
 
         this.eventEmitter.emit('message.incoming', {
@@ -221,12 +228,16 @@ export class WWebJSEngine implements IWhatsAppEngine {
   }
 
   async sendTyping(deviceId: string, phone: string, durationMs: number): Promise<void> {
-    const client = this.getClient(deviceId);
-    const jid = this.resolveJid(phone, false);
-    const chat = await client.getChatById(jid);
-    await chat.sendStateTyping();
-    await new Promise((r) => setTimeout(r, durationMs));
-    await chat.clearState();
+    try {
+      const client = this.getClient(deviceId);
+      const jid = this.resolveJid(phone, false);
+      const chat = await client.getChatById(jid);
+      await chat.sendStateTyping();
+      await new Promise((r) => setTimeout(r, durationMs));
+      await chat.clearState();
+    } catch (err) {
+      this.logger.warn(`[WWebJS] sendTyping failed for ${phone}: ${err.message}`);
+    }
   }
 
   async checkNumber(deviceId: string, phone: string): Promise<boolean> {
@@ -245,6 +256,8 @@ export class WWebJSEngine implements IWhatsAppEngine {
   private resolveJid(phone: string, isGroup: boolean): string {
     if (phone.includes('@')) return phone;
     if (isGroup) return `${phone}@g.us`;
+    // LID numbers are 15+ digits and don't start with a country code pattern
+    if (/^\d{15,}$/.test(phone)) return `${phone}@lid`;
     return `${phone}@c.us`;
   }
 }

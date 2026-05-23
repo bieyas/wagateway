@@ -22,6 +22,8 @@ export class AIAgentService implements OnModuleInit {
   private openai: OpenAI;
   private whitelistByDevice = new Map<string, { devMode: boolean; phones: Set<string> }>();
   private blacklistByDevice = new Map<string, Set<string>>();
+  // Maps LID number → phone number per device (e.g. "11210015658176" → "6281228240369")
+  private lidToPhoneMap = new Map<string, Map<string, string>>();
 
   constructor(
     @InjectRepository(AIAgent)
@@ -53,15 +55,29 @@ export class AIAgentService implements OnModuleInit {
     this.logger.log(`[BLACKLIST] Loaded ${total} number(s) across ${this.blacklistByDevice.size} device(s) from DB`);
   }
 
+  registerLidMapping(deviceId: string, lid: string, phone: string): void {
+    if (!this.lidToPhoneMap.has(deviceId)) this.lidToPhoneMap.set(deviceId, new Map());
+    this.lidToPhoneMap.get(deviceId)!.set(lid, phone);
+  }
+
+  private resolveToPhone(deviceId: string, identifier: string): string {
+    return this.lidToPhoneMap.get(deviceId)?.get(identifier) ?? identifier;
+  }
+
   private isWhitelisted(deviceId: string, phone: string): boolean {
     const entry = this.whitelistByDevice.get(deviceId);
     if (!entry || !entry.devMode) return true;
     if (entry.phones.size === 0) return false;
-    return entry.phones.has(phone);
+    // Check both the raw identifier and the resolved phone number
+    const resolved = this.resolveToPhone(deviceId, phone);
+    return entry.phones.has(phone) || entry.phones.has(resolved);
   }
 
   private isBlacklisted(deviceId: string, phone: string): boolean {
-    return this.blacklistByDevice.get(deviceId)?.has(phone) ?? false;
+    const set = this.blacklistByDevice.get(deviceId);
+    if (!set) return false;
+    const resolved = this.resolveToPhone(deviceId, phone);
+    return set.has(phone) || set.has(resolved);
   }
 
   getWhitelistStatus(deviceId: string): { devMode: boolean; phones: string[] } {
@@ -135,6 +151,12 @@ export class AIAgentService implements OnModuleInit {
     }
   }
 
+  @OnEvent('lid.mapping')
+  handleLidMapping(payload: { deviceId: string; lid: string; phoneNumber: string }): void {
+    this.registerLidMapping(payload.deviceId, payload.lid, payload.phoneNumber);
+    this.logger.log(`[LID MAP] ${payload.lid} → ${payload.phoneNumber} (device: ${payload.deviceId})`);
+  }
+
   @OnEvent('message.incoming')
   async handleIncomingMessage(payload: WhatsAppMessage): Promise<void> {
     // Log semua data pesan masuk
@@ -178,9 +200,41 @@ export class AIAgentService implements OnModuleInit {
         return;
       }
 
+      const device = await this.deviceRepo.findOne({ where: { deviceId: payload.deviceId, isActive: true } });
+      if (!device) {
+        this.logger.warn(`[INCOMING] Device ${payload.deviceId} not found or inactive`);
+        return;
+      }
+      this.logger.log(`[INCOMING] Device found: ${device.deviceId}, status: ${device.status}`);
+
+      // Always save message to conversation so CS can see it regardless of whitelist
+      const isHuman = await this.conversationsService.isHumanTakeover(payload.deviceId, resolvedPhone);
+      const conv = await this.conversationsService.findOrCreate(
+        payload.deviceId,
+        resolvedPhone,
+        payload.senderName,
+      );
+      await this.conversationsService.addMessage(
+        conv.id,
+        MessageRole.USER,
+        payload.message || '',
+        0,
+        undefined,
+        payload.mediaUrl,
+        payload.type !== 'text' ? payload.type : undefined,
+      );
+      this.logger.log(`[INCOMING] Message saved to conversation ${conv.id}`);
+
+      // If human takeover, skip AI and stop here
+      if (isHuman) {
+        this.logger.log(`[INCOMING] Human takeover active for ${resolvedPhone}, skipping AI`);
+        return;
+      }
+
+      // Whitelist check: only blocks AI auto-reply, message is already saved above
       if (!this.isWhitelisted(payload.deviceId, resolvedPhone)) {
         const wl = this.getWhitelistStatus(payload.deviceId);
-        this.logger.warn(`[INCOMING] REJECTED - ${resolvedPhone} (raw: ${payload.phone}) not in whitelist (devMode, ${wl.phones.length} allowed)`);
+        this.logger.warn(`[INCOMING] AI SKIPPED - ${resolvedPhone} not in whitelist (devMode, ${wl.phones.length} allowed)`);
         return;
       }
       this.logger.log(`[INCOMING] ACCEPTED - ${resolvedPhone} passed whitelist check`);
@@ -192,33 +246,6 @@ export class AIAgentService implements OnModuleInit {
       }
       this.logger.log(`[INCOMING] AI Agent found: ${agent.model}, enabled: ${agent.enabled}`);
 
-      const device = await this.deviceRepo.findOne({ where: { deviceId: payload.deviceId, isActive: true } });
-      if (!device) {
-        this.logger.warn(`[INCOMING] Device ${payload.deviceId} not found or inactive`);
-        return;
-      }
-      this.logger.log(`[INCOMING] Device found: ${device.deviceId}, status: ${device.status}`);
-
-      const isHuman = await this.conversationsService.isHumanTakeover(payload.deviceId, resolvedPhone);
-      if (isHuman) {
-        this.logger.log(`[INCOMING] Human takeover active for ${resolvedPhone}, saving message and skipping AI`);
-        const convHuman = await this.conversationsService.findOrCreate(
-          payload.deviceId,
-          resolvedPhone,
-          payload.senderName,
-        );
-        await this.conversationsService.addMessage(
-          convHuman.id,
-          MessageRole.USER,
-          payload.message || '',
-          0,
-          undefined,
-          payload.mediaUrl,
-          payload.type !== 'text' ? payload.type : undefined,
-        );
-        return;
-      }
-
       if (!this.isWithinOperatingHours(agent)) {
         if (agent.outsideHoursMessage) {
           await this.sendReply(device, resolvedPhone, agent.outsideHoursMessage, agent);
@@ -226,23 +253,7 @@ export class AIAgentService implements OnModuleInit {
         return;
       }
 
-      const conv = await this.conversationsService.findOrCreate(
-        payload.deviceId,
-        resolvedPhone,
-        payload.senderName,
-      );
       this.logger.log(`[INCOMING] Conversation ID: ${conv.id}`);
-
-      await this.conversationsService.addMessage(
-        conv.id,
-        MessageRole.USER,
-        payload.message || '',
-        0,
-        undefined,
-        payload.mediaUrl,
-        payload.type !== 'text' ? payload.type : undefined,
-      );
-      this.logger.log(`[INCOMING] User message saved to conversation (type: ${payload.type}, mediaUrl: ${payload.mediaUrl || 'none'})`);
 
       if (this.isHandoffRequest(payload.message, agent.handoffKeywords)) {
         this.logger.log(`[INCOMING] Handoff request detected!`);
