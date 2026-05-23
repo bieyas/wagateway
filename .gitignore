@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+sessions/
+logs/
+*.log
+.DS_Store
+coverage/
+# WWebJS sessions
+sessions/wwebjs/
+# Build output
+frontend/dist/
+backend/dist/
+# WWebJS cache
+backend/.wwebjs_cache/
+# Stray files
+backend/n
