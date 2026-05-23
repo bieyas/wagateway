@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Wifi, WifiOff, QrCode, Trash2, RefreshCw, Link2, Bot, Zap, Cpu, Globe } from 'lucide-react'
+import { Plus, Wifi, WifiOff, QrCode, Trash2, RefreshCw, Link2, Bot, Zap } from 'lucide-react'
 import { deviceApi } from '@/lib/api'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -30,8 +30,6 @@ export default function DevicesPage() {
   const [qrImage, setQrImage] = useState('')
   const [webhookUrl, setWebhookUrl] = useState('')
   const [trackingUrl, setTrackingUrl] = useState('')
-  const [newEngine, setNewEngine] = useState<'baileys' | 'wwebjs'>('baileys')
-  const [showEngineSwitch, setShowEngineSwitch] = useState(false)
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['devices'],
@@ -51,14 +49,8 @@ export default function DevicesPage() {
     return () => { socket.disconnect() }
   }, [qc, selectedDevice])
 
-  const engineSwitchMut = useMutation({
-    mutationFn: ({ deviceId, engine }: { deviceId: string; engine: string }) =>
-      deviceApi.update(deviceId, { engine }),
-    onSuccess: () => { setShowEngineSwitch(false); qc.invalidateQueries({ queryKey: ['devices'] }) },
-  })
-
   const createMut = useMutation({
-    mutationFn: () => deviceApi.create({ name: newName, engine: newEngine }),
+    mutationFn: () => deviceApi.create({ name: newName, engine: 'wwebjs' }),
     onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['devices'] })
       setNewToken(res.data?.token || '')
@@ -160,8 +152,7 @@ export default function DevicesPage() {
                           ? 'bg-purple-100 text-purple-700'
                           : 'bg-blue-100 text-blue-700'
                       }`}>
-                        {d.engine === 'wwebjs' ? <Globe className="w-2.5 h-2.5" /> : <Cpu className="w-2.5 h-2.5" />}
-                        {d.engine === 'wwebjs' ? 'WWebJS' : 'Baileys'}
+                        WWebJS
                       </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-0.5 font-mono">{d.deviceId}</p>
@@ -211,11 +202,6 @@ export default function DevicesPage() {
                     onClick={() => navigate(`/devices/${d.deviceId}/ai-agent`)}>
                     <Bot className="w-3.5 h-3.5" /> AI Agent
                   </Button>
-                  <Button size="sm" variant="ghost"
-                    onClick={() => { setSelectedDevice(d); setShowEngineSwitch(true) }}
-                    title="Ganti Engine">
-                    <Cpu className="w-3.5 h-3.5" />
-                  </Button>
                   <Button size="sm" variant="ghost" className="ml-auto text-red-400 hover:text-red-600 hover:bg-red-50"
                     onClick={() => { if (confirm(`Hapus "${d.name}"?`)) deleteMut.mutate(d.deviceId) }}>
                     <Trash2 className="w-3.5 h-3.5" />
@@ -230,7 +216,7 @@ export default function DevicesPage() {
       {/* Create Dialog */}
       <AppModal
         open={showCreate}
-        onClose={v => { setShowCreate(v); if (!v) { setNewName(''); setNewToken(''); setNewEngine('baileys') } }}
+        onClose={v => { setShowCreate(v); if (!v) { setNewName(''); setNewToken('') } }}
         title="Tambah Device Baru"
         description="Device akan dibuat dengan token otomatis"
       >
@@ -258,31 +244,6 @@ export default function DevicesPage() {
                   onChange={e => setNewName(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && newName && createMut.mutate()}
                   autoFocus />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700">Pilih Engine</label>
-                <div className="grid grid-cols-2 gap-3">
-                  {([{ key: 'baileys', icon: Cpu, label: 'Baileys', desc: 'Ringan & cepat', sub: 'WebSocket native', color: 'blue' },
-                    { key: 'wwebjs', icon: Globe, label: 'WWebJS', desc: 'Lebih kompatibel', sub: 'Browser-based', color: 'purple' }] as const).map(({ key, icon: Icon, label, desc, sub, color }) => (
-                    <button key={key} type="button" onClick={() => setNewEngine(key)}
-                      className={`flex flex-col items-start gap-0.5 p-3.5 rounded-xl border-2 transition-all text-left ${
-                        newEngine === key
-                          ? color === 'blue' ? 'border-blue-500 bg-blue-50' : 'border-purple-500 bg-purple-50'
-                          : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-                      }`}>
-                      <div className={`flex items-center gap-2 mb-1 ${
-                        newEngine === key ? (color === 'blue' ? 'text-blue-700' : 'text-purple-700') : 'text-gray-700'
-                      }`}>
-                        <Icon className="w-4 h-4" />
-                        <span className="text-sm font-semibold">{label}</span>
-                      </div>
-                      <span className={`text-xs font-medium ${
-                        newEngine === key ? (color === 'blue' ? 'text-blue-600' : 'text-purple-600') : 'text-gray-600'
-                      }`}>{desc}</span>
-                      <span className="text-[11px] text-gray-400">{sub}</span>
-                    </button>
-                  ))}
-                </div>
               </div>
               <Button className="w-full" loading={createMut.isPending} onClick={() => createMut.mutate()} disabled={!newName.trim()}>
                 Buat Device
@@ -315,63 +276,6 @@ export default function DevicesPage() {
             <p className="text-xs text-gray-500 leading-relaxed">QR diperbarui otomatis jika expired. Jangan tutup dialog sampai tersambung.</p>
           </div>
         </div>
-      </AppModal>
-
-      {/* Engine Switch Dialog */}
-      <AppModal
-        open={showEngineSwitch}
-        onClose={setShowEngineSwitch}
-        title="Ganti Engine"
-        description={
-          <>
-            <span className="font-medium text-gray-700">{selectedDevice?.name}</span>
-            {' '}· Aktif:{' '}
-            <span className={`font-semibold ${
-              selectedDevice?.engine === 'wwebjs' ? 'text-purple-600' : 'text-blue-600'
-            }`}>{selectedDevice?.engine === 'wwebjs' ? 'WWebJS' : 'Baileys'}</span>
-          </>
-        }
-      >
-          <div className="space-y-4 mt-1">
-            <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-3">
-              <span className="text-amber-500 text-base leading-none mt-0.5">⚠</span>
-              <p className="text-xs text-amber-800 leading-relaxed">
-                Mengganti engine memerlukan <strong>scan ulang QR code</strong>. Session lama akan dihapus otomatis.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              {([{ key: 'baileys', icon: Cpu, label: 'Baileys', desc: 'Ringan & cepat', sub: 'WebSocket native', color: 'blue' },
-                { key: 'wwebjs', icon: Globe, label: 'WWebJS', desc: 'Lebih kompatibel', sub: 'Browser-based', color: 'purple' }] as const).map(({ key, icon: Icon, label, desc, sub, color }) => {
-                const isActive = (selectedDevice?.engine || 'baileys') === key
-                return (
-                  <button key={key} type="button"
-                    disabled={engineSwitchMut.isPending}
-                    onClick={() => engineSwitchMut.mutate({ deviceId: selectedDevice?.deviceId, engine: key })}
-                    className={`relative flex flex-col items-start gap-0.5 p-3.5 rounded-xl border-2 transition-all text-left ${
-                      isActive
-                        ? color === 'blue' ? 'border-blue-500 bg-blue-50' : 'border-purple-500 bg-purple-50'
-                        : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-                    } ${engineSwitchMut.isPending ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}>
-                    {isActive && (
-                      <span className={`absolute top-2.5 right-2.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                        color === 'blue' ? 'bg-blue-500 text-white' : 'bg-purple-500 text-white'
-                      }`}>Aktif</span>
-                    )}
-                    <div className={`flex items-center gap-2 mb-1 ${
-                      isActive ? (color === 'blue' ? 'text-blue-700' : 'text-purple-700') : 'text-gray-700'
-                    }`}>
-                      <Icon className="w-4 h-4" />
-                      <span className="text-sm font-semibold">{label}</span>
-                    </div>
-                    <span className={`text-xs font-medium ${
-                      isActive ? (color === 'blue' ? 'text-blue-600' : 'text-purple-600') : 'text-gray-600'
-                    }`}>{desc}</span>
-                    <span className="text-[11px] text-gray-400">{sub}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
       </AppModal>
 
       {/* Webhook Dialog */}
