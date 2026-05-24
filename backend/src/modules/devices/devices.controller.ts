@@ -7,9 +7,12 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseGuards,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { ApiTags, ApiOperation, ApiSecurity } from '@nestjs/swagger';
 import { DevicesService } from './devices.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
@@ -19,18 +22,19 @@ import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { CurrentDevice } from '../../common/decorators/current-device.decorator';
 import { Device } from './entities/device.entity';
 import { WhatsAppService } from '../../whatsapp/whatsapp.service';
-import { ConversationsService } from '../conversations/conversations.service';
-import { MessageRole } from '../conversations/entities/conversation-message.entity';
 import { successResponse, errorResponse } from '../../common/utils/response.util';
 import { normalizePhone } from '../../common/utils/phone.util';
+import { QueueService } from '../queue/queue.service';
 
 @ApiTags('Devices')
 @Controller()
 export class DevicesController {
+  private readonly logger = new Logger('MixRadiusAudit');
+
   constructor(
     private readonly devicesService: DevicesService,
     private readonly whatsappService: WhatsAppService,
-    private readonly conversationsService: ConversationsService,
+    private readonly queueService: QueueService,
   ) {}
 
   @Post('api/device')
@@ -184,51 +188,69 @@ export class DevicesController {
   @Post('api/v2/send-message')
   @UseGuards(ApiKeyGuard)
   @ApiSecurity('token')
-  @ApiOperation({ summary: 'Send bulk messages (Wablas v2 compatible)' })
+  @ApiOperation({ summary: 'Send bulk messages via queue (Wablas v2 compatible)' })
   async sendMessageBulk(
     @CurrentDevice() device: Device,
     @Body() body: { data: Array<{ phone: string; message?: string; type?: string; mediaUrl?: string; caption?: string; filename?: string; isGroup?: boolean }> },
+    @Req() req: Request,
   ) {
+    // [AUDIT] Log raw request from MixRadius for payload inspection
+    this.logger.log(`[MIXRADIUS] POST /api/v2/send-message from ${req.headers['x-forwarded-for'] || req.socket?.remoteAddress}`);
+    this.logger.log(`[MIXRADIUS] Headers: ${JSON.stringify(Object.fromEntries(Object.entries(req.headers).filter(([k]) => !['authorization','cookie'].includes(k))))}`);
+    this.logger.log(`[MIXRADIUS] Raw body: ${JSON.stringify(body)}`);
+
     if (!Array.isArray(body?.data)) {
       return errorResponse('data array is required');
     }
-    const results = await Promise.allSettled(
-      body.data.map(async (item) => {
-        const phone = item.phone?.includes('@') ? item.phone : normalizePhone(item.phone);
-        const type = item.type || 'text';
-        const isGroup = item.isGroup ?? false;
-        let msgId: string;
-        if (type === 'image' && item.mediaUrl) {
-          msgId = await this.whatsappService.sendImage(device.deviceId, { phone, mediaUrl: item.mediaUrl, caption: item.caption || item.message || '', isGroup, type: 'image' });
-        } else if (type === 'video' && item.mediaUrl) {
-          msgId = await this.whatsappService.sendVideo(device.deviceId, { phone, mediaUrl: item.mediaUrl, caption: item.caption || item.message || '', isGroup, type: 'video' });
-        } else if (type === 'audio' && item.mediaUrl) {
-          msgId = await this.whatsappService.sendAudio(device.deviceId, { phone, mediaUrl: item.mediaUrl, isGroup, type: 'audio' });
-        } else if (type === 'document' && item.mediaUrl) {
-          msgId = await this.whatsappService.sendDocument(device.deviceId, { phone, mediaUrl: item.mediaUrl, caption: item.caption || item.message || '', filename: item.filename, isGroup, type: 'document' });
-        } else {
-          msgId = await this.whatsappService.sendText(device.deviceId, { phone, message: item.message || '', isGroup });
-        }
-        // Save to conversation so it appears in chat history
-        try {
-          const conv = await this.conversationsService.findOrCreate(device.deviceId, phone);
-          const content = item.caption || item.message || '';
-          await this.conversationsService.addMessage(
-            conv.id,
-            MessageRole.ASSISTANT,
-            content,
-            0,
-            'webhook',
-            type !== 'text' ? item.mediaUrl : undefined,
-            type !== 'text' ? type : 'text',
-          );
-        } catch (_) { /* non-critical */ }
-        return msgId;
-      }),
-    );
-    const sent = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
-    return successResponse({ sent, failed, total: results.length }, 'Bulk messages processed');
+    const items = body.data.map(item => ({
+      ...item,
+      phone: item.isGroup || item.phone?.includes('@') ? item.phone : normalizePhone(item.phone),
+    }));
+    const { batchId, jobIds } = await this.queueService.enqueue(device.deviceId, items);
+    return successResponse({ batchId, queued: jobIds.length, jobIds }, `${jobIds.length} messages queued`);
+  }
+
+  @Get('api/queue/batch/:batchId')
+  @UseGuards(ApiKeyGuard)
+  @ApiSecurity('token')
+  @ApiOperation({ summary: 'Get batch queue status' })
+  async getBatchStatus(@Param('batchId') batchId: string) {
+    const result = await this.queueService.getBatchStatus(batchId);
+    return successResponse(result);
+  }
+
+  @Get('api/queue/job/:jobId')
+  @UseGuards(ApiKeyGuard)
+  @ApiSecurity('token')
+  @ApiOperation({ summary: 'Get single job status' })
+  async getJobStatus(@Param('jobId') jobId: string) {
+    const job = await this.queueService.getJobStatus(jobId);
+    if (!job) return errorResponse('Job not found');
+    return successResponse(job);
+  }
+
+  @Get('api/queue')
+  @UseGuards(ApiKeyGuard)
+  @ApiSecurity('token')
+  @ApiOperation({ summary: 'List recent queue jobs for this device' })
+  async listQueue(
+    @CurrentDevice() device: Device,
+    @Query('limit') limit?: string,
+  ) {
+    const jobs = await this.queueService.getDeviceQueue(device.deviceId, limit ? parseInt(limit) : 50);
+    return successResponse(jobs);
+  }
+
+  @Post('api/queue/retry')
+  @UseGuards(ApiKeyGuard)
+  @ApiSecurity('token')
+  @ApiOperation({ summary: 'Retry failed jobs (optionally filter by batchId)' })
+  async retryFailed(
+    @CurrentDevice() device: Device,
+    @Body() body: { batchId?: string },
+  ) {
+    const count = await this.queueService.retryFailed(device.deviceId, body?.batchId);
+    return successResponse({ retried: count }, `${count} jobs re-queued`);
   }
 
   @Post('api/send-message')
@@ -248,78 +270,9 @@ export class DevicesController {
     },
   ) {
     if (!body.phone) throw new BadRequestException('phone is required');
-    const phone = body.phone.includes('@') ? body.phone : normalizePhone(body.phone);
-    const type = body.type || 'text';
-    const isGroup = body.isGroup ?? false;
-
     try {
-      let msgId: string;
-
-      if (type === 'image') {
-        if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for image type');
-        msgId = await this.whatsappService.sendImage(device.deviceId, {
-          phone,
-          mediaUrl: body.mediaUrl,
-          caption: body.caption || body.message || '',
-          isGroup,
-          type: 'image',
-        });
-      } else if (type === 'video') {
-        if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for video type');
-        msgId = await this.whatsappService.sendVideo(device.deviceId, {
-          phone,
-          mediaUrl: body.mediaUrl,
-          caption: body.caption || body.message || '',
-          isGroup,
-          type: 'video',
-        });
-      } else if (type === 'audio') {
-        if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for audio type');
-        msgId = await this.whatsappService.sendAudio(device.deviceId, {
-          phone,
-          mediaUrl: body.mediaUrl,
-          isGroup,
-          type: 'audio',
-        });
-      } else if (type === 'document') {
-        if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for document type');
-        msgId = await this.whatsappService.sendDocument(device.deviceId, {
-          phone,
-          mediaUrl: body.mediaUrl,
-          caption: body.caption || body.message || '',
-          filename: body.filename,
-          isGroup,
-          type: 'document',
-        });
-      } else {
-        if (!body.message?.trim()) throw new BadRequestException('message is required for text type');
-        msgId = await this.whatsappService.sendText(device.deviceId, {
-          phone,
-          message: body.message,
-          isGroup,
-        });
-      }
-
-      // Save CS reply to conversation so it appears in chat history
-      try {
-        const conv = await this.conversationsService.findOrCreate(
-          device.deviceId,
-          phone,
-        );
-        const msgContent = body.caption || body.message || '';
-        const msgType = type !== 'text' ? type : 'text';
-        const mediaUrlToSave = type !== 'text' ? body.mediaUrl : undefined;
-        await this.conversationsService.addMessage(
-          conv.id,
-          MessageRole.ASSISTANT,
-          msgContent,
-          0,
-          'human-cs',
-          mediaUrlToSave,
-          msgType,
-        );
-      } catch (_) { /* non-critical */ }
-
+      const msgId = await this.devicesService.sendMessage(device, body);
+      const phone = body.isGroup || body.phone.includes('@') ? body.phone : normalizePhone(body.phone);
       return {
         status: true,
         message: 'Message sent',
@@ -350,11 +303,7 @@ export class DevicesController {
     if (!message?.trim()) throw new BadRequestException('message is required');
     const normalizedPhone = phone.includes('@') ? phone : normalizePhone(phone);
     try {
-      const msgId = await this.whatsappService.sendText(device.deviceId, {
-        phone: normalizedPhone,
-        message,
-        isGroup: isGroup === 'true',
-      });
+      const msgId = await this.devicesService.sendMessage(device, { phone: normalizedPhone, message, isGroup: isGroup === 'true' });
       return {
         status: true,
         message: 'Message sent',

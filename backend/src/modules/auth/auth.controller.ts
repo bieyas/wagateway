@@ -20,7 +20,7 @@ export class AuthController {
 
   @Post('register')
   @ApiOperation({ summary: 'Daftarkan organisasi baru beserta akun owner' })
-  async register(@Body() body: { orgName: string; slug: string; email: string; password: string; fullName?: string }) {
+  async register(@Body() body: { orgName: string; slug: string; email: string; username?: string; password: string; fullName?: string }) {
     const result = await this.authService.registerOrganization(body);
     return successResponse(result, 'Organisasi berhasil didaftarkan');
   }
@@ -47,7 +47,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Undang anggota baru ke organisasi (owner only)' })
   async inviteMember(
     @Request() req: any,
-    @Body() body: { email: string; password: string; fullName?: string; role?: UserRole },
+    @Body() body: { email: string; username?: string; password: string; fullName?: string; role?: UserRole },
   ) {
     const user = req.user;
     if (user.role !== UserRole.OWNER && user.role !== UserRole.SUPERADMIN) {

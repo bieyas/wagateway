@@ -10,6 +10,7 @@ export class WWebJSEngine implements IWhatsAppEngine {
   private clients = new Map<string, Client>();
   private qrCodes = new Map<string, string>();
   private readyStates = new Map<string, boolean>();
+  private connecting = new Set<string>();
 
   private readonly CHROMIUM_PATH = '/usr/bin/chromium-browser';
   private readonly SESSION_BASE = process.env.SESSION_PATH || './sessions';
@@ -20,6 +21,13 @@ export class WWebJSEngine implements IWhatsAppEngine {
   ) {}
 
   async connect(deviceId: string): Promise<void> {
+    if (this.connecting.has(deviceId)) {
+      this.logger.warn(`[WWebJS] connect() already in progress for ${deviceId}, skipping duplicate call`);
+      return;
+    }
+    this.connecting.add(deviceId);
+
+    try {
     const stale = this.clients.get(deviceId);
     if (stale) {
       this.logger.warn(`[WWebJS] Stale client found for ${deviceId}, destroying before re-init`);
@@ -66,7 +74,11 @@ export class WWebJSEngine implements IWhatsAppEngine {
       this.readyStates.set(deviceId, true);
       this.qrCodes.delete(deviceId);
       const phone = client.info?.wid?.user || '';
-      this.eventEmitter.emit('wwebjs.connected', { deviceId, phone });
+      // selfLid: the bot's own LID (e.g. "93154149675218") used for mention detection in groups
+      const selfLidRaw: string = (client.info?.wid as any)?._serialized || '';
+      const selfLid = selfLidRaw.replace(/@(c\.us|s\.whatsapp\.net|lid)$/, '');
+      this.logger.log(`[WWebJS] Client ${deviceId} phone=${phone} selfLid=${selfLid || 'n/a'}`);
+      this.eventEmitter.emit('wwebjs.connected', { deviceId, phone, selfLid });
     });
 
     client.on('authenticated', () => {
@@ -93,7 +105,10 @@ export class WWebJSEngine implements IWhatsAppEngine {
         const contact = await msg.getContact();
         const isLid = msg.from.endsWith('@lid');
         const isGroup = msg.from.endsWith('@g.us');
-        const phone = msg.from.replace(/@(c\.us|lid|g\.us)$/, '');
+        // For groups: phone is the full JID (e.g. "120363xxx@g.us") to avoid ID collision with individual chats
+        // For LID: preserve full LID JID for resolution
+        // For regular: strip suffix to get plain phone number
+        const phone = isGroup ? msg.from : msg.from.replace(/@(c\.us|lid)$/, '');
 
         // For LID contacts: real phone is in contact.id.user (e.g. "6281228240369@c.us" → "6281228240369")
         // contact.number for LID contacts returns the LID itself, not the phone number
@@ -101,6 +116,16 @@ export class WWebJSEngine implements IWhatsAppEngine {
           ? String((contact as any).id.user).replace(/@(c\.us|s\.whatsapp\.net)$/, '')
           : undefined;
 
+        // For group messages: sender is contact (individual), group name comes from chat
+        let groupName: string | undefined;
+        if (isGroup) {
+          try {
+            const chat = await msg.getChat();
+            groupName = chat.name || undefined;
+          } catch {
+            groupName = undefined;
+          }
+        }
 
         const msgType = msg.type === 'chat' ? 'text' : msg.type;
         const isMedia = msg.hasMedia && ['image', 'video', 'audio', 'document', 'ptt'].includes(msg.type);
@@ -126,16 +151,23 @@ export class WWebJSEngine implements IWhatsAppEngine {
           this.eventEmitter.emit('lid.mapping', { deviceId, lid: phone, phoneNumber: senderPn });
         }
 
+        // Extract mentioned contact IDs (plain phone numbers) for group mention detection
+        const mentionedIds: string[] = isGroup && Array.isArray((msg as any).mentionedIds) && (msg as any).mentionedIds.length
+          ? (msg as any).mentionedIds.map((jid: string) => String(jid).replace(/@(c\.us|s\.whatsapp\.net|lid)$/, ''))
+          : [];
+
         this.eventEmitter.emit('message.incoming', {
           deviceId,
-          phone: isLid ? msg.from : phone,
+          phone,
           senderPn,
           senderName: contact.pushname || contact.name || phone,
           message: msg.body,
           type: msg.type === 'ptt' ? 'audio' : msgType,
           isGroup,
           groupId: isGroup ? phone : undefined,
+          groupName,
           mediaUrl,
+          mentionedIds,
           whatsappMessageId: msg.id._serialized,
           timestamp: msg.timestamp,
         });
@@ -161,6 +193,10 @@ export class WWebJSEngine implements IWhatsAppEngine {
       this.readyStates.set(deviceId, false);
       this.qrCodes.delete(deviceId);
       throw err;
+    }
+
+    } finally {
+      this.connecting.delete(deviceId);
     }
   }
 
@@ -189,7 +225,7 @@ export class WWebJSEngine implements IWhatsAppEngine {
     const client = this.getClient(deviceId);
     const jid = this.resolveJid(options.phone, options.isGroup ?? false);
     this.logger.log(`[WWebJS sendText] ${options.phone} → ${jid}`);
-    const result = await client.sendMessage(jid, options.message);
+    const result = await client.sendMessage(jid, options.message, { linkPreview: false });
     this.logger.log(`[WWebJS sendText] Success! ID: ${result.id._serialized}`);
     return result.id._serialized;
   }
@@ -227,10 +263,10 @@ export class WWebJSEngine implements IWhatsAppEngine {
     return result.id._serialized;
   }
 
-  async sendTyping(deviceId: string, phone: string, durationMs: number): Promise<void> {
+  async sendTyping(deviceId: string, phone: string, durationMs: number, isGroup = false): Promise<void> {
     try {
       const client = this.getClient(deviceId);
-      const jid = this.resolveJid(phone, false);
+      const jid = this.resolveJid(phone, isGroup);
       const chat = await client.getChatById(jid);
       await chat.sendStateTyping();
       await new Promise((r) => setTimeout(r, durationMs));
@@ -260,6 +296,18 @@ export class WWebJSEngine implements IWhatsAppEngine {
     const jid = this.resolveJid(phone, false);
     const result = await client.isRegisteredUser(jid);
     return result;
+  }
+
+  async getProfilePicUrl(deviceId: string, phone: string): Promise<string | null> {
+    try {
+      const client = this.getClient(deviceId);
+      const jid = this.resolveJid(phone, false);
+      const contact = await client.getContactById(jid);
+      const url = await contact.getProfilePicUrl();
+      return url || null;
+    } catch {
+      return null;
+    }
   }
 
   private getClient(deviceId: string): Client {

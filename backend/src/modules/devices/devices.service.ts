@@ -4,8 +4,21 @@ import { Repository } from 'typeorm';
 import * as QRCode from 'qrcode';
 import { Device, DeviceStatus } from './entities/device.entity';
 import { WhatsAppService } from '../../whatsapp/whatsapp.service';
+import { ConversationsService } from '../conversations/conversations.service';
+import { MessageRole } from '../conversations/entities/conversation-message.entity';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
+import { normalizePhone } from '../../common/utils/phone.util';
+
+export interface SendMessageDto {
+  phone: string;
+  message?: string;
+  type?: string;
+  mediaUrl?: string;
+  caption?: string;
+  filename?: string;
+  isGroup?: boolean;
+}
 
 @Injectable()
 export class DevicesService {
@@ -13,6 +26,7 @@ export class DevicesService {
     @InjectRepository(Device)
     private readonly deviceRepo: Repository<Device>,
     private readonly whatsappService: WhatsAppService,
+    private readonly conversationsService: ConversationsService,
   ) {}
 
   async create(dto: CreateDeviceDto, organizationId?: string): Promise<Device> {
@@ -103,5 +117,46 @@ export class DevicesService {
 
   async findByToken(token: string): Promise<Device | null> {
     return this.deviceRepo.findOne({ where: { token, isActive: true } });
+  }
+
+  async sendMessage(device: Device, body: SendMessageDto): Promise<string> {
+    const type = body.type || 'text';
+    const isGroup = body.isGroup ?? false;
+    const phone = isGroup || body.phone.includes('@') ? body.phone : normalizePhone(body.phone);
+
+    let msgId: string;
+
+    if (type === 'image') {
+      if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for image type');
+      msgId = await this.whatsappService.sendImage(device.deviceId, { phone, mediaUrl: body.mediaUrl, caption: body.caption || body.message || '', isGroup, type: 'image' });
+    } else if (type === 'video') {
+      if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for video type');
+      msgId = await this.whatsappService.sendVideo(device.deviceId, { phone, mediaUrl: body.mediaUrl, caption: body.caption || body.message || '', isGroup, type: 'video' });
+    } else if (type === 'audio') {
+      if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for audio type');
+      msgId = await this.whatsappService.sendAudio(device.deviceId, { phone, mediaUrl: body.mediaUrl, isGroup, type: 'audio' });
+    } else if (type === 'document') {
+      if (!body.mediaUrl) throw new BadRequestException('mediaUrl is required for document type');
+      msgId = await this.whatsappService.sendDocument(device.deviceId, { phone, mediaUrl: body.mediaUrl, caption: body.caption || body.message || '', filename: body.filename, isGroup, type: 'document' });
+    } else {
+      if (!body.message?.trim()) throw new BadRequestException('message is required for text type');
+      msgId = await this.whatsappService.sendText(device.deviceId, { phone, message: body.message, isGroup });
+    }
+
+    // Save CS reply to conversation so it appears in chat history (non-critical)
+    try {
+      const conv = await this.conversationsService.findOrCreate(device.deviceId, phone);
+      await this.conversationsService.addMessage(
+        conv.id,
+        MessageRole.ASSISTANT,
+        body.caption || body.message || '',
+        0,
+        'human-cs',
+        type !== 'text' ? body.mediaUrl : undefined,
+        type !== 'text' ? type : 'text',
+      );
+    } catch { /* non-critical */ }
+
+    return msgId;
   }
 }

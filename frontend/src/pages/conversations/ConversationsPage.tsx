@@ -1,12 +1,24 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Users, RefreshCw, UserCheck, Bot, RotateCcw, Send, Search, ArrowLeft, FileText, Music, Smile, Paperclip, X, FileAudio, FileVideo } from 'lucide-react'
+import { Users, RefreshCw, UserCheck, Bot, RotateCcw, Send, Search, ArrowLeft, FileText, Music, Smile, Paperclip, X, FileAudio, FileVideo, MoreVertical, Copy, XCircle, BotMessageSquare, Trash2 } from 'lucide-react'
 import EmojiPicker, { type EmojiClickData, Theme } from 'emoji-picker-react'
-import { convApi, chatApi, messageApi, mediaApi } from '@/lib/api'
+import { convApi, chatApi, messageApi, mediaApi, unreadApi } from '@/lib/api'
 import { useAuthStore } from '@/store/auth.store'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { formatPhone, truncate } from '@/lib/utils'
+
+function stripWhatsAppFormat(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/~([^~]+)~/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\n/g, ' ')
+    .trim()
+}
 
 function relativeTime(date: string | Date | null): string {
   if (!date) return ''
@@ -21,6 +33,18 @@ function relativeTime(date: string | Date | null): string {
 }
 
 type FilterTab = 'all' | 'ai' | 'human' | 'closed'
+
+function getConversationTitle(conversation: any): string {
+  return conversation.isGroup
+    ? conversation.groupName || conversation.contactName || conversation.phone
+    : conversation.contactName || formatPhone(conversation.phone)
+}
+
+function getConversationPreview(conversation: any): string {
+  const message = stripWhatsAppFormat(conversation.lastMessage || 'Belum ada pesan')
+  if (!conversation.isGroup || !conversation.lastSenderName) return message
+  return `${conversation.lastSenderName}: ${message}`
+}
 
 function MediaPreview({ url, type, caption }: { url: string; type: string; caption?: string }) {
   if (type === 'image') {
@@ -62,7 +86,41 @@ function MediaPreview({ url, type, caption }: { url: string; type: string; capti
   return null
 }
 
-function ChatBubble({ message }: { message: any }) {
+function parseWhatsAppText(text: string): React.ReactNode[] {
+  const lines = text.split('\n')
+  const result: React.ReactNode[] = []
+  lines.forEach((line, i) => {
+    if (i > 0) result.push(<br key={`br-${i}`} />)
+    result.push(...parseInlineFormats(line, i))
+  })
+  return result
+}
+
+function parseInlineFormats(text: string, keyOffset: number): React.ReactNode[] {
+  // Matches: *bold*, _italic_, ~strike~, `code` — non-greedy, no leading/trailing spaces inside markers
+  const tokenRegex = /\*([^*]+)\*|_([^_]+)_|~([^~]+)~|`([^`]+)`/g
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = tokenRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index))
+    }
+    const key = `${keyOffset}-f-${match.index}`
+    if (match[1] !== undefined) parts.push(<strong key={key}>{match[1]}</strong>)
+    else if (match[2] !== undefined) parts.push(<em key={key}>{match[2]}</em>)
+    else if (match[3] !== undefined) parts.push(<s key={key}>{match[3]}</s>)
+    else if (match[4] !== undefined) parts.push(<code key={key} className="bg-black/10 rounded px-1 font-mono text-xs">{match[4]}</code>)
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+  return parts
+}
+
+function ChatBubble({ message, isGroup }: { message: any; isGroup?: boolean }) {
   const isIncoming = message.role === 'user'
   const isAssistant = message.role === 'assistant'
   const isHumanCS = isAssistant && message.model === 'human-cs'
@@ -83,14 +141,17 @@ function ChatBubble({ message }: { message: any }) {
                 : 'bg-emerald-100 text-gray-800 rounded-tr-none'
         }`}
       >
+        {isGroup && isIncoming && message.senderName && (
+          <span className="text-[11px] text-emerald-700 font-semibold block mb-0.5">{message.senderName}</span>
+        )}
         {isAI && <span className="text-[10px] text-emerald-600 font-medium block mb-0.5">AI</span>}
         {isHumanCS && <span className="text-[10px] text-blue-600 font-medium block mb-0.5">CS</span>}
         {isWebhook && <span className="text-[10px] text-orange-600 font-medium block mb-0.5">Bot</span>}
         {hasMedia && (
           <MediaPreview url={message.mediaUrl} type={message.type} caption={message.content || undefined} />
         )}
-        {(!hasMedia || message.content) && (
-          <p className="leading-relaxed whitespace-pre-wrap">{message.content}</p>
+        {(!hasMedia || message.content) && message.content && (
+          <p className="leading-relaxed">{parseWhatsAppText(message.content)}</p>
         )}
         <div className="flex items-center gap-1 mt-1 justify-end">
           <span className="text-[10px] text-gray-500">
@@ -105,58 +166,162 @@ function ChatBubble({ message }: { message: any }) {
 function ConversationItem({
   conversation,
   isSelected,
-  onClick
+  onClick,
+  onTakeover,
+  onRelease,
+  onReset,
+  onClose,
+  onDelete,
 }: {
   conversation: any
   isSelected: boolean
   onClick: () => void
+  onTakeover: () => void
+  onRelease: () => void
+  onReset: () => void
+  onClose: () => void
+  onDelete: () => void
 }) {
-  const initials = (conversation.contactName || conversation.phone)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(conversation.avatarUrl || null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const title = getConversationTitle(conversation)
+  const initials = title
     .split(' ')
     .map((n: string) => n[0])
     .join('')
     .slice(0, 2)
     .toUpperCase()
 
+  useEffect(() => {
+    if (conversation.isGroup) return
+    if (conversation.avatarUrl) {
+      setAvatarUrl(conversation.avatarUrl)
+      return
+    }
+    convApi.avatar(conversation.phone)
+      .then((res: any) => { if (res?.data?.avatarUrl) setAvatarUrl(res.data.avatarUrl) })
+      .catch(() => {})
+  }, [conversation.phone, conversation.avatarUrl, conversation.isGroup])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [menuOpen])
+
+  const action = (fn: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setMenuOpen(false)
+    fn()
+  }
+
   return (
     <div
       onClick={onClick}
-      className={`flex items-center gap-3 px-3 py-3 cursor-pointer transition-colors hover:bg-gray-100 ${
+      className={`relative flex items-center gap-3 px-3 py-3 cursor-pointer transition-colors hover:bg-gray-100 group ${
         isSelected ? 'bg-gray-100' : ''
       }`}
     >
-      <div
-        className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${
-          conversation.humanTakeover
-            ? 'bg-orange-100 text-orange-600'
-            : 'bg-emerald-100 text-emerald-600'
-        }`}
-      >
-        {initials}
+      <div className="w-12 h-12 rounded-full shrink-0 overflow-hidden">
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt={initials}
+            className="w-full h-full object-cover"
+            onError={() => setAvatarUrl(null)}
+          />
+        ) : (
+          <div
+            className={`w-full h-full flex items-center justify-center text-sm font-semibold ${
+              conversation.isGroup
+                ? 'bg-indigo-100 text-indigo-600'
+                : conversation.humanTakeover
+                ? 'bg-orange-100 text-orange-600'
+                : 'bg-emerald-100 text-emerald-600'
+            }`}
+          >
+            {conversation.isGroup ? <Users className="w-5 h-5" /> : initials}
+          </div>
+        )}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between">
           <h3 className="font-medium text-gray-900 truncate">
-            {conversation.contactName || formatPhone(conversation.phone)}
+            {title}
           </h3>
-          <span className="text-xs text-gray-500 shrink-0 ml-2">
-            {relativeTime(conversation.lastMessageAt)}
-          </span>
+          <div className="flex items-center gap-1 shrink-0 ml-2">
+            {!menuOpen && (
+              <span className={`text-xs group-hover:hidden ${conversation.csUnreadCount > 0 ? 'text-[#25d366] font-medium' : 'text-gray-500'}`}>
+                {relativeTime(conversation.lastMessageAt)}
+              </span>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
+              className={`p-1 rounded hover:bg-gray-200 transition-colors ${
+                menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              }`}
+            >
+              <MoreVertical className="w-4 h-4 text-gray-500" />
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-2 mt-0.5">
           <p className="text-sm text-gray-500 truncate flex-1">
             {conversation.humanTakeover && (
               <span className="text-orange-600 font-medium mr-1">[CS]</span>
             )}
-            {truncate(conversation.lastMessage || 'Belum ada pesan', 40)}
+            {truncate(getConversationPreview(conversation), 48)}
           </p>
-          {conversation.unreadCount > 0 && (
-            <span className="bg-emerald-500 text-white text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-              {conversation.unreadCount}
+          {conversation.csUnreadCount > 0 && (
+            <span className="bg-[#25d366] text-white text-[11px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
+              {conversation.csUnreadCount > 99 ? '99+' : conversation.csUnreadCount}
             </span>
           )}
         </div>
       </div>
+
+      {menuOpen && (
+        <div
+          ref={menuRef}
+          className="absolute right-2 top-10 z-50 bg-white rounded-xl shadow-lg border border-gray-100 py-1 w-52 text-sm"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {conversation.humanTakeover ? (
+            <button onClick={action(onRelease)} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-gray-50 text-emerald-700">
+              <BotMessageSquare className="w-4 h-4" />
+              Kembalikan ke AI
+            </button>
+          ) : (
+            <button onClick={action(onTakeover)} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-gray-50 text-orange-600">
+              <UserCheck className="w-4 h-4" />
+              Ambil Alih
+            </button>
+          )}
+          <div className="my-1 border-t border-gray-100" />
+          <button onClick={action(() => { navigator.clipboard.writeText(conversation.phone) })} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-gray-50 text-gray-700">
+            <Copy className="w-4 h-4" />
+            {conversation.isGroup ? 'Salin ID grup' : 'Salin nomor'}
+          </button>
+          <button onClick={action(onReset)} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-gray-50 text-gray-700">
+            <RotateCcw className="w-4 h-4" />
+            Reset percakapan
+          </button>
+          <button onClick={action(onClose)} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-gray-50 text-red-500">
+            <XCircle className="w-4 h-4" />
+            Tutup percakapan
+          </button>
+          <div className="my-1 border-t border-gray-100" />
+          <button onClick={action(onDelete)} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-red-50 text-red-600">
+            <Trash2 className="w-4 h-4" />
+            Hapus percakapan
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -164,10 +329,17 @@ function ConversationItem({
 export default function ConversationsPage() {
   const qc = useQueryClient()
   const { token, deviceId } = useAuthStore()
+  const [searchParams] = useSearchParams()
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [newMessage, setNewMessage] = useState('')
-  const [filterTab, setFilterTab] = useState<FilterTab>('all')
+  const [filterTab, setFilterTab] = useState<FilterTab>(() => {
+    const f = searchParams.get('filter')
+    if (f === 'takeover') return 'human'
+    if (f === 'ai') return 'ai'
+    if (f === 'closed') return 'closed'
+    return 'all'
+  })
   const [showEmoji, setShowEmoji] = useState(false)
   const [mediaFile, setMediaFile] = useState<File | null>(null)
   const [mediaPreview, setMediaPreview] = useState<{ url: string; type: string; name: string } | null>(null)
@@ -252,8 +424,25 @@ export default function ConversationsPage() {
     }
   })
 
+  const closeMut = useMutation({
+    mutationFn: (phone: string) => convApi.close(phone),
+    onSuccess: (_data, phone) => {
+      qc.invalidateQueries({ queryKey: ['chats'] })
+      if (selectedPhone === phone) setSelectedPhone(null)
+    }
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (phone: string) => convApi.delete(phone),
+    onSuccess: (_data, phone) => {
+      qc.invalidateQueries({ queryKey: ['chats'] })
+      if (selectedPhone === phone) setSelectedPhone(null)
+    }
+  })
+
   const sendMessageMut = useMutation({
     mutationFn: async (data: { phone: string; message: string }) => {
+      const isGroup = !!selectedSummary?.isGroup
       if (mediaFile) {
         const uploaded = await mediaApi.upload(mediaFile)
         const uploadedUrl = (uploaded as any)?.data?.url
@@ -265,9 +454,10 @@ export default function ConversationsPage() {
           type: mediaType,
           mediaUrl: uploadedUrl,
           caption: data.message || '',
+          isGroup,
         })
       }
-      return messageApi.sendText({ phone: data.phone, message: data.message, deviceId })
+      return messageApi.sendText({ phone: data.phone, message: data.message, deviceId, isGroup })
     },
     onSuccess: () => {
       setNewMessage('')
@@ -310,7 +500,8 @@ export default function ConversationsPage() {
 
   const filteredConversations = conversations.filter((c: any) => {
     const query = searchQuery.toLowerCase()
-    const matchSearch = !query || (c.contactName && c.contactName.toLowerCase().includes(query)) || c.phone.toLowerCase().includes(query)
+    const title = getConversationTitle(c).toLowerCase()
+    const matchSearch = !query || title.includes(query) || c.phone.toLowerCase().includes(query) || (c.groupName && c.groupName.toLowerCase().includes(query))
     return matchSearch && filterFn(c)
   })
 
@@ -429,7 +620,19 @@ export default function ConversationsPage() {
                   key={conversation.phone}
                   conversation={conversation}
                   isSelected={selectedPhone === conversation.phone}
-                  onClick={() => setSelectedPhone(conversation.phone)}
+                  onClick={() => {
+                    setSelectedPhone(conversation.phone)
+                    if (conversation.csUnreadCount > 0) {
+                      unreadApi.markRead(conversation.deviceId, conversation.phone)
+                        .then(() => qc.invalidateQueries({ queryKey: ['chats'] }))
+                        .catch(() => {})
+                    }
+                  }}
+                  onTakeover={() => takeoverMut.mutate(conversation.phone)}
+                  onRelease={() => releaseMut.mutate(conversation.phone)}
+                  onReset={() => resetMut.mutate(conversation.phone)}
+                  onClose={() => closeMut.mutate(conversation.phone)}
+                  onDelete={() => deleteMut.mutate(conversation.phone)}
                 />
               ))}
             </div>
@@ -472,25 +675,36 @@ export default function ConversationsPage() {
 
               <div
                 className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 mr-3 ${
-                  selectedSummary?.humanTakeover
+                  selectedSummary?.isGroup
+                    ? 'bg-indigo-100 text-indigo-600'
+                    : selectedSummary?.humanTakeover
                     ? 'bg-orange-100 text-orange-600'
                     : 'bg-emerald-100 text-emerald-600'
                 }`}
               >
-                {(selectedSummary?.contactName || selectedSummary?.phone)
-                  ?.split(' ')
-                  .map((n: string) => n[0])
-                  .join('')
-                  .slice(0, 2)
-                  .toUpperCase()}
+                {selectedSummary?.isGroup ? (
+                  <Users className="w-5 h-5" />
+                ) : (
+                  (selectedSummary?.contactName || selectedSummary?.phone)
+                    ?.split(' ')
+                    .map((n: string) => n[0])
+                    .join('')
+                    .slice(0, 2)
+                    .toUpperCase()
+                )}
               </div>
 
               <div className="flex-1 min-w-0">
                 <h3 className="font-medium text-gray-900 truncate">
-                  {selectedSummary?.contactName || formatPhone(selectedPhone)}
+                  {selectedSummary ? getConversationTitle(selectedSummary) : formatPhone(selectedPhone)}
                 </h3>
                 <p className="text-xs text-gray-500">
-                  {selectedSummary?.humanTakeover ? (
+                  {selectedSummary?.isGroup ? (
+                    <span className="flex items-center gap-1 text-gray-500">
+                      <Users className="w-3 h-3" />
+                      Grup · {selectedSummary.humanTakeover ? 'CS aktif' : selectedSummary.isAIActive ? 'AI aktif' : 'Closed'}
+                    </span>
+                  ) : selectedSummary?.humanTakeover ? (
                     <span className="flex items-center gap-1 text-orange-600">
                       <UserCheck className="w-3 h-3" /> CS Manusia Aktif
                     </span>
@@ -537,7 +751,7 @@ export default function ConversationsPage() {
               ) : (
                 <div className="space-y-1">
                   {selectedMessages.map((message: any) => (
-                    <ChatBubble key={message.id} message={message} />
+                    <ChatBubble key={message.id} message={message} isGroup={selectedSummary?.isGroup} />
                   ))}
                   <div ref={messagesEndRef} />
                 </div>

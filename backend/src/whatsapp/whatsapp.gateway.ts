@@ -66,6 +66,10 @@ export class WhatsAppGateway
       senderName: payload.senderName,
       message: payload.message,
       type: payload.type,
+      isGroup: payload.isGroup || false,
+      groupId: payload.groupId || null,
+      groupName: payload.groupName || null,
+      mediaUrl: payload.mediaUrl || null,
       timestamp: payload.timestamp,
     });
   }

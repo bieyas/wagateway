@@ -107,6 +107,12 @@ export const aiApi = {
   updateGroupConfig: (deviceId: string, data: object) => dashApi.put(`/devices/${deviceId}/ai-agent/groups`, data),
 }
 
+// --- Unread ---
+export const unreadApi = {
+  get: () => dashApi.get('/unread'),
+  markRead: (deviceId: string, phone: string) => dashApi.post('/conversations/read', { deviceId, phone }),
+}
+
 // --- Messages ---
 export const messageApi = {
   sendText: (data: object) => api.post('/send-message', data),
@@ -127,15 +133,35 @@ export const mediaApi = {
 // --- Conversations ---
 export const convApi = {
   list: () => api.get('/ai-agent/conversations'),
-  get: (phone: string) => api.get(`/ai-agent/conversations/${phone}`),
-  reset: (phone: string) => api.delete(`/ai-agent/conversations/${phone}`),
-  handoff: (phone: string) => api.post(`/ai-agent/conversations/${phone}/handoff`),
-  takeover: (phone: string) => api.post(`/ai-agent/conversations/${phone}/takeover`),
-  release: (phone: string) => api.post(`/ai-agent/conversations/${phone}/release`),
+  get: (phone: string) => api.get(`/ai-agent/conversations/${encodeURIComponent(phone)}`),
+  reset: (phone: string) => api.delete(`/ai-agent/conversations/${encodeURIComponent(phone)}`),
+  handoff: (phone: string) => api.post(`/ai-agent/conversations/${encodeURIComponent(phone)}/handoff`),
+  takeover: (phone: string) => api.post(`/ai-agent/conversations/${encodeURIComponent(phone)}/takeover`),
+  release: (phone: string) => api.post(`/ai-agent/conversations/${encodeURIComponent(phone)}/release`),
+  close: (phone: string) => api.post(`/ai-agent/conversations/${encodeURIComponent(phone)}/close`),
+  delete: (phone: string) => api.post(`/ai-agent/conversations/${encodeURIComponent(phone)}/delete`),
+  avatar: (phone: string) => api.get(`/ai-agent/conversations/${encodeURIComponent(phone)}/avatar`),
+}
+
+// --- Knowledge Base ---
+export const kbApi = {
+  list:   (deviceId: string)                    => dashApi.get(`/devices/${deviceId}/knowledge-base`),
+  create: (deviceId: string, data: object)      => dashApi.post(`/devices/${deviceId}/knowledge-base`, data),
+  update: (deviceId: string, id: string, data: object) => dashApi.put(`/devices/${deviceId}/knowledge-base/${id}`, data),
+  remove: (deviceId: string, id: string)        => dashApi.delete(`/devices/${deviceId}/knowledge-base/${id}`),
+}
+
+// --- Quick Replies ---
+export const qrApi = {
+  list:   (deviceId: string, q?: string)              => dashApi.get(`/devices/${deviceId}/quick-replies${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  create: (deviceId: string, data: object)             => dashApi.post(`/devices/${deviceId}/quick-replies`, data),
+  update: (deviceId: string, id: string, data: object) => dashApi.put(`/devices/${deviceId}/quick-replies/${id}`, data),
+  remove: (deviceId: string, id: string)               => dashApi.delete(`/devices/${deviceId}/quick-replies/${id}`),
+  use:    (deviceId: string, id: string)               => dashApi.post(`/devices/${deviceId}/quick-replies/${id}/use`),
 }
 
 // --- Unified Chats (WhatsApp Web-style) ---
 export const chatApi = {
   list: () => api.get('/ai-agent/conversations/chats/all'),
-  get: (phone: string) => api.get(`/ai-agent/conversations/chats/${phone}`),
+  get: (phone: string) => api.get(`/ai-agent/conversations/chats/${encodeURIComponent(phone)}`),
 }

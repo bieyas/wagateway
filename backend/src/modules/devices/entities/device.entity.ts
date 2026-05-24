@@ -29,6 +29,9 @@ export class Device extends BaseEntity {
   @Column({ nullable: true })
   phone: string;
 
+  @Column({ nullable: true })
+  selfLid: string;
+
   @Column({ type: 'enum', enum: DeviceStatus, default: DeviceStatus.DISCONNECTED })
   status: DeviceStatus;
 

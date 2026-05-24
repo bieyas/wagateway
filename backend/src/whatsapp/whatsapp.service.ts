@@ -32,6 +32,7 @@ export interface WhatsAppMessage {
   groupId?: string;
   groupName?: string;
   mediaUrl?: string;
+  mentionedIds?: string[];
   whatsappMessageId: string;
   timestamp: number;
 }
@@ -93,6 +94,10 @@ export class WhatsAppService implements OnApplicationBootstrap, OnApplicationShu
     return { exists, jid: exists ? `${phone}@c.us` : null };
   }
 
+  async getProfilePicUrl(deviceId: string, phone: string): Promise<string | null> {
+    return this.wwebjsEngine.getProfilePicUrl(deviceId, phone);
+  }
+
   async sendText(deviceId: string, options: SendTextOptions): Promise<string> {
     return this.wwebjsEngine.sendText(deviceId, options);
   }
@@ -113,8 +118,8 @@ export class WhatsAppService implements OnApplicationBootstrap, OnApplicationShu
     return this.wwebjsEngine.sendAudio(deviceId, options);
   }
 
-  async sendTyping(deviceId: string, phone: string, durationMs: number): Promise<void> {
-    await this.wwebjsEngine.sendTyping(deviceId, phone, durationMs);
+  async sendTyping(deviceId: string, phone: string, durationMs: number, isGroup = false): Promise<void> {
+    await this.wwebjsEngine.sendTyping(deviceId, phone, durationMs, isGroup);
   }
 
   async markAsRead(deviceId: string, phone: string, messageId: string): Promise<void> {
@@ -125,15 +130,32 @@ export class WhatsAppService implements OnApplicationBootstrap, OnApplicationShu
     return lidOrPhone;
   }
 
-  async waitUntilConnected(_deviceId: string, _timeoutMs = 12000): Promise<void> {}
+  async waitUntilConnected(deviceId: string, timeoutMs = 12000): Promise<void> {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (this.isConnected(deviceId)) return;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error(`Device ${deviceId} is not connected`);
+  }
+
+  async recoverConnection(deviceId: string): Promise<void> {
+    this.logger.warn(`[recover] Restarting WWebJS client for ${deviceId}`);
+    await this.wwebjsEngine.disconnect(deviceId).catch((err) =>
+      this.logger.warn(`[recover] disconnect failed for ${deviceId}: ${err.message}`),
+    );
+    await this.connect(deviceId);
+    await this.waitUntilConnected(deviceId, 30000);
+  }
 
   @OnEvent('wwebjs.connected')
-  async handleWWebjsConnected(payload: { deviceId: string; phone: string }): Promise<void> {
+  async handleWWebjsConnected(payload: { deviceId: string; phone: string; selfLid?: string }): Promise<void> {
     await this.deviceRepo.update({ deviceId: payload.deviceId }, {
       status: DeviceStatus.CONNECTED,
       phone: payload.phone,
+      ...(payload.selfLid ? { selfLid: payload.selfLid } : {}),
     });
-    this.logger.log(`[WWebJS] DB updated: device ${payload.deviceId} CONNECTED (${payload.phone})`);
+    this.logger.log(`[WWebJS] DB updated: device ${payload.deviceId} CONNECTED (${payload.phone}, lid=${payload.selfLid || 'n/a'})`);
     this.eventEmitter.emit('device.connected', payload);
     this.eventEmitter.emit('device.status', { deviceId: payload.deviceId, status: 'connected' });
   }

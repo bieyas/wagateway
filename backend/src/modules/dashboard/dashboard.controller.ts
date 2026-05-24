@@ -8,6 +8,7 @@ import { OrganizationGuard } from '../auth/guards/organization.guard';
 import { UserRole } from '../auth/entities/user.entity';
 import { DevicesService } from '../devices/devices.service';
 import { AIAgentService } from '../ai-agent/ai-agent.service';
+import { ConversationsService } from '../conversations/conversations.service';
 import { UpdateAIAgentDto } from '../ai-agent/dto/update-ai-agent.dto';
 import { UpdateDeviceDto } from '../devices/dto/update-device.dto';
 import { CreateDeviceDto } from '../devices/dto/create-device.dto';
@@ -21,12 +22,29 @@ export class DashboardController {
   constructor(
     private readonly devicesService: DevicesService,
     private readonly aiAgentService: AIAgentService,
+    private readonly conversationsService: ConversationsService,
   ) {}
 
   private orgId(req: any): string | undefined {
     const user = req.user;
     // Superadmin sees all (no filter), others scoped to their org
     return user?.role === UserRole.SUPERADMIN ? undefined : user?.organizationId;
+  }
+
+  @Get('unread')
+  @ApiOperation({ summary: 'Get total CS unread count across all devices' })
+  async getUnread(@Request() req: any) {
+    const devices = await this.devicesService.findAll(this.orgId(req));
+    const deviceIds = devices.map(d => d.deviceId);
+    const result = await this.conversationsService.getTotalUnread(deviceIds);
+    return successResponse(result);
+  }
+
+  @Post('conversations/read')
+  @ApiOperation({ summary: 'Mark conversation as read by CS' })
+  async markRead(@Request() req: any, @Body() body: { deviceId: string; phone: string }) {
+    await this.conversationsService.markCsRead(body.deviceId, body.phone);
+    return successResponse(null, 'Marked as read');
   }
 
   @Get('devices')

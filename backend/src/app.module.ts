@@ -13,6 +13,12 @@ import { AIAgent } from './modules/ai-agent/entities/ai-agent.entity';
 import { User } from './modules/auth/entities/user.entity';
 import { Organization } from './modules/auth/entities/organization.entity';
 import { ChatHistory } from './modules/chat-history/entities/chat-history.entity';
+import { KnowledgeBase } from './modules/knowledge-base/entities/knowledge-base.entity';
+import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
+import { QuickReply } from './modules/quick-reply/entities/quick-reply.entity';
+import { QuickReplyModule } from './modules/quick-reply/quick-reply.module';
+import { MessageQueue } from './modules/queue/entities/message-queue.entity';
+import { QueueModule } from './modules/queue/queue.module';
 import { DevicesModule } from './modules/devices/devices.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { AIAgentModule } from './modules/ai-agent/ai-agent.module';
@@ -21,6 +27,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ChatHistoryModule } from './modules/chat-history/chat-history.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { MediaModule } from './modules/media/media.module';
+import { WebhookModule } from './modules/webhook/webhook.module';
 
 @Module({
   imports: [
@@ -39,7 +46,7 @@ import { MediaModule } from './modules/media/media.module';
         username: config.get('database.username'),
         password: config.get('database.password'),
         database: config.get('database.name'),
-        entities: [Device, Conversation, ConversationMessage, AIAgent, ChatHistory, User, Organization],
+        entities: [Device, Conversation, ConversationMessage, AIAgent, ChatHistory, User, Organization, KnowledgeBase, QuickReply, MessageQueue],
         synchronize: config.get('app.env') === 'development',
         logging: config.get('app.env') === 'development',
       }),
@@ -68,6 +75,10 @@ import { MediaModule } from './modules/media/media.module';
     AuthModule,
     DashboardModule,
     MediaModule,
+    KnowledgeBaseModule,
+    QuickReplyModule,
+    QueueModule,
+    WebhookModule,
   ],
 })
 export class AppModule {}

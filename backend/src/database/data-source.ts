@@ -5,6 +5,11 @@ import { Conversation } from '../modules/conversations/entities/conversation.ent
 import { ConversationMessage } from '../modules/conversations/entities/conversation-message.entity';
 import { AIAgent } from '../modules/ai-agent/entities/ai-agent.entity';
 import { ChatHistory } from '../modules/chat-history/entities/chat-history.entity';
+import { User } from '../modules/auth/entities/user.entity';
+import { Organization } from '../modules/auth/entities/organization.entity';
+import { KnowledgeBase } from '../modules/knowledge-base/entities/knowledge-base.entity';
+import { QuickReply } from '../modules/quick-reply/entities/quick-reply.entity';
+import { MessageQueue } from '../modules/queue/entities/message-queue.entity';
 
 dotenv.config();
 
@@ -15,7 +20,7 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',
   database: process.env.DB_NAME || 'whatsapp_gateway',
-  entities: [Device, Conversation, ConversationMessage, AIAgent, ChatHistory],
+  entities: [Device, Conversation, ConversationMessage, AIAgent, ChatHistory, User, Organization, KnowledgeBase, QuickReply, MessageQueue],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: false,
   logging: process.env.APP_ENV === 'development',

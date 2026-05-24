@@ -25,4 +25,5 @@ export interface IWhatsAppEngine {
   sendAudio(deviceId: string, options: SendMediaOptions): Promise<string>;
   sendTyping(deviceId: string, phone: string, durationMs: number): Promise<void>;
   checkNumber(deviceId: string, phone: string): Promise<boolean>;
+  getProfilePicUrl(deviceId: string, phone: string): Promise<string | null>;
 }

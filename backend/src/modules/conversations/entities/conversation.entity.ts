@@ -27,6 +27,15 @@ export class Conversation extends BaseEntity {
   @Column()
   phone: string;
 
+  @Column({ default: false })
+  isGroup: boolean;
+
+  @Column({ type: 'varchar', nullable: true })
+  groupId: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  groupName: string | null;
+
   @Column({ nullable: true })
   contactName: string;
 
@@ -47,6 +56,15 @@ export class Conversation extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   metadata: string;
+
+  @Column({ nullable: true })
+  avatarUrl: string;
+
+  @Column({ nullable: true })
+  escalatedAt: Date;
+
+  @Column({ default: 0 })
+  csUnreadCount: number;
 
   @OneToMany(() => ConversationMessage, (msg) => msg.conversation, { cascade: true })
   messages: ConversationMessage[];

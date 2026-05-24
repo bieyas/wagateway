@@ -18,6 +18,9 @@ export class ConversationMessage extends BaseEntity {
   @Column({ type: 'enum', enum: MessageRole })
   role: MessageRole;
 
+  @Column({ type: 'varchar', nullable: true })
+  senderName: string | null;
+
   @Column({ type: 'text' })
   content: string;
 

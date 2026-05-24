@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
 import { DashboardController } from './dashboard.controller';
 import { DevicesModule } from '../devices/devices.module';
 import { AIAgentModule } from '../ai-agent/ai-agent.module';
+import { ConversationsModule } from '../conversations/conversations.module';
 
 @Module({
-  imports: [DevicesModule, AIAgentModule],
+  imports: [DevicesModule, AIAgentModule, ConversationsModule],
   controllers: [DashboardController],
 })
 export class DashboardModule {}

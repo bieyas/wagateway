@@ -105,4 +105,31 @@ export class UpdateAIAgentDto {
   @IsOptional()
   @IsNumber()
   maxTypingDelay?: number;
+
+  @ApiProperty({ required: false, example: 'openai', description: 'AI provider: openai, gemini, groq, openrouter, mistral, custom' })
+  @IsOptional()
+  @IsString()
+  aiProvider?: string;
+
+  @ApiProperty({ required: false, description: 'API key for the chosen AI provider (tenant-owned)' })
+  @IsOptional()
+  @IsString()
+  aiApiKey?: string;
+
+  @ApiProperty({ required: false, description: 'Custom base URL for OpenAI-compatible endpoint' })
+  @IsOptional()
+  @IsString()
+  aiBaseUrl?: string;
+
+  @ApiProperty({ required: false, default: 30, description: 'Minutes of inactivity before auto-returning to AI mode (0 = disabled)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  handoffTimeout?: number;
+
+  @ApiProperty({ required: false, default: 10, description: 'Seconds to wait after last message before AI replies (burst aggregation)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  typingDelay?: number;
 }

@@ -54,6 +54,7 @@ export class AuthService {
     orgName: string;
     slug: string;
     email: string;
+    username?: string;
     password: string;
     fullName?: string;
   }): Promise<{ accessToken: string; user: object }> {
@@ -63,12 +64,16 @@ export class AuthService {
     const emailExists = await this.userRepo.findOne({ where: { email: dto.email } });
     if (emailExists) throw new ConflictException(`Email '${dto.email}' sudah terdaftar`);
 
+    const resolvedUsername = dto.username ?? dto.email;
+    const usernameExists = await this.userRepo.findOne({ where: { username: resolvedUsername } });
+    if (usernameExists) throw new ConflictException(`Username '${resolvedUsername}' sudah digunakan`);
+
     const org = this.orgRepo.create({ name: dto.orgName, slug: dto.slug });
     await this.orgRepo.save(org);
 
     const user = this.userRepo.create({
       email: dto.email,
-      username: dto.email,
+      username: resolvedUsername,
       password: dto.password,
       fullName: dto.fullName,
       role: UserRole.OWNER,
@@ -76,11 +81,12 @@ export class AuthService {
     });
     await this.userRepo.save(user);
 
-    return this.login({ username: dto.email, password: dto.password });
+    return this.login({ username: resolvedUsername, password: dto.password });
   }
 
   async inviteMember(dto: {
     email: string;
+    username?: string;
     password: string;
     fullName?: string;
     role?: UserRole;
@@ -89,12 +95,16 @@ export class AuthService {
     const org = await this.orgRepo.findOne({ where: { id: dto.organizationId } });
     if (!org) throw new NotFoundException('Organization tidak ditemukan');
 
-    const exists = await this.userRepo.findOne({ where: { email: dto.email } });
-    if (exists) throw new ConflictException(`Email '${dto.email}' sudah terdaftar`);
+    const emailExists = await this.userRepo.findOne({ where: { email: dto.email } });
+    if (emailExists) throw new ConflictException(`Email '${dto.email}' sudah terdaftar`);
+
+    const resolvedUsername = dto.username ?? dto.email;
+    const usernameExists = await this.userRepo.findOne({ where: { username: resolvedUsername } });
+    if (usernameExists) throw new ConflictException(`Username '${resolvedUsername}' sudah digunakan`);
 
     const user = this.userRepo.create({
       email: dto.email,
-      username: dto.email,
+      username: resolvedUsername,
       password: dto.password,
       fullName: dto.fullName,
       role: dto.role ?? UserRole.MEMBER,
@@ -118,10 +128,11 @@ export class AuthService {
     return (await this.userRepo.count()) > 0;
   }
 
-  async createSuperadmin(email: string, password: string): Promise<User> {
+  async createSuperadmin(email: string, password: string, username?: string): Promise<User> {
     const exists = await this.userRepo.findOne({ where: { email } });
     if (exists) throw new ConflictException(`Email '${email}' sudah ada`);
-    const user = this.userRepo.create({ email, username: email, password, role: UserRole.SUPERADMIN });
+    const resolvedUsername = username ?? email;
+    const user = this.userRepo.create({ email, username: resolvedUsername, password, role: UserRole.SUPERADMIN });
     return this.userRepo.save(user);
   }
 }

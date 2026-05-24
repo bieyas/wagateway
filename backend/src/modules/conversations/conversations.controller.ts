@@ -6,6 +6,7 @@ import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { CurrentDevice } from '../../common/decorators/current-device.decorator';
 import { Device } from '../devices/entities/device.entity';
 import { successResponse } from '../../common/utils/response.util';
+import { WhatsAppService } from '../../whatsapp/whatsapp.service';
 
 @ApiTags('AI Conversations')
 @ApiSecurity('token')
@@ -15,6 +16,7 @@ export class ConversationsController {
   constructor(
     private readonly conversationsService: ConversationsService,
     private readonly chatsService: ChatsService,
+    private readonly whatsappService: WhatsAppService,
   ) {}
 
   @Get()
@@ -58,6 +60,27 @@ export class ConversationsController {
   async release(@CurrentDevice() device: Device, @Param('phone') phone: string) {
     await this.conversationsService.releaseToAI(device.deviceId, phone);
     return successResponse(null, 'Conversation returned to AI');
+  }
+
+  @Post(':phone/close')
+  @ApiOperation({ summary: 'Close conversation' })
+  async close(@CurrentDevice() device: Device, @Param('phone') phone: string) {
+    await this.conversationsService.closeConversation(device.deviceId, phone);
+    return successResponse(null, 'Conversation closed');
+  }
+
+  @Get(':phone/avatar')
+  @ApiOperation({ summary: 'Get and cache profile picture URL for a contact' })
+  async getAvatar(@CurrentDevice() device: Device, @Param('phone') phone: string) {
+    const url = await this.conversationsService.refreshAvatar(device.deviceId, phone, this.whatsappService);
+    return successResponse({ avatarUrl: url });
+  }
+
+  @Post(':phone/delete')
+  @ApiOperation({ summary: 'Permanently delete conversation and all messages' })
+  async deleteConversation(@CurrentDevice() device: Device, @Param('phone') phone: string) {
+    await this.conversationsService.deleteConversation(device.deviceId, phone);
+    return successResponse(null, 'Conversation deleted');
   }
 
   // ========== UNIFIED CHAT API (WhatsApp Web-style) ==========

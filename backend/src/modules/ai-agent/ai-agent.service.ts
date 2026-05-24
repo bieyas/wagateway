@@ -1,29 +1,25 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
-import OpenAI from 'openai';
-import * as dayjs from 'dayjs';
-import * as timezone from 'dayjs/plugin/timezone';
-import * as utc from 'dayjs/plugin/utc';
 import { AIAgent } from './entities/ai-agent.entity';
 import { ConversationsService } from '../conversations/conversations.service';
 import { WhatsAppService, WhatsAppMessage } from '../../whatsapp/whatsapp.service';
 import { Device } from '../devices/entities/device.entity';
 import { MessageRole } from '../conversations/entities/conversation-message.entity';
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
+import { AiReplyService } from './ai-reply.service';
+import { AiWebhookService } from './ai-webhook.service';
 
 @Injectable()
 export class AIAgentService implements OnModuleInit {
   private readonly logger = new Logger(AIAgentService.name);
-  private openai: OpenAI;
   private whitelistByDevice = new Map<string, { devMode: boolean; phones: Set<string> }>();
   private blacklistByDevice = new Map<string, Set<string>>();
   // Maps LID number → phone number per device (e.g. "11210015658176" → "6281228240369")
   private lidToPhoneMap = new Map<string, Map<string, string>>();
+  // Debounce timers for burst message aggregation: key = "deviceId:phone"
+  private debounceTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     @InjectRepository(AIAgent)
@@ -32,14 +28,11 @@ export class AIAgentService implements OnModuleInit {
     private readonly deviceRepo: Repository<Device>,
     private readonly conversationsService: ConversationsService,
     private readonly whatsappService: WhatsAppService,
-    private readonly configService: ConfigService,
+    private readonly aiReplyService: AiReplyService,
+    private readonly aiWebhookService: AiWebhookService,
   ) {}
 
-
   async onModuleInit() {
-    const apiKey = this.configService.get<string>('openai.apiKey');
-    this.openai = new OpenAI({ apiKey });
-
     const agents = await this.agentRepo.find();
     for (const agent of agents) {
       this.whitelistByDevice.set(agent.deviceId, {
@@ -157,42 +150,38 @@ export class AIAgentService implements OnModuleInit {
     this.logger.log(`[LID MAP] ${payload.lid} → ${payload.phoneNumber} (device: ${payload.deviceId})`);
   }
 
+  @OnEvent('message.status')
+  async handleMessageStatus(payload: { deviceId: string; whatsappMessageId: string; status: number }): Promise<void> {
+    const device = await this.deviceRepo.findOne({ where: { deviceId: payload.deviceId } });
+    if (device?.trackingUrl) {
+      this.aiWebhookService.forwardMessageStatus(device.trackingUrl, payload).catch(() => {});
+    }
+  }
+
   @OnEvent('message.incoming')
   async handleIncomingMessage(payload: WhatsAppMessage): Promise<void> {
-    // Log semua data pesan masuk
-    this.logger.log(`[INCOMING MESSAGE] ==========================================`);
-    this.logger.log(`[INCOMING] deviceId: ${payload.deviceId}`);
-    this.logger.log(`[INCOMING] phone: ${payload.phone}`);
-    this.logger.log(`[INCOMING] senderName: ${payload.senderName}`);
-    this.logger.log(`[INCOMING] senderPn: ${payload.senderPn || 'none'}`);
-    this.logger.log(`[INCOMING] message: "${payload.message}"`);
-    this.logger.log(`[INCOMING] type: ${payload.type}`);
-    this.logger.log(`[INCOMING] isGroup: ${payload.isGroup}`);
-    this.logger.log(`[INCOMING] groupId: ${payload.groupId}`);
-    this.logger.log(`[INCOMING] whatsappMessageId: ${payload.whatsappMessageId}`);
-    this.logger.log(`[INCOMING] timestamp: ${payload.timestamp}`);
-    this.logger.log(`[INCOMING MESSAGE] ==========================================`);
+    this.logger.log(`[INCOMING] ${payload.deviceId} ← ${payload.phone} (${payload.type})`);
 
-    if (!payload.message?.trim() && !payload.mediaUrl) {
-      this.logger.log(`[INCOMING] Empty message and no media, skipping`);
-      return;
-    }
+    if (!payload.message?.trim() && !payload.mediaUrl) return;
 
     try {
       // Forward to device webhookUrl immediately (before any AI/whitelist filtering)
       const deviceForWebhook = await this.deviceRepo.findOne({ where: { deviceId: payload.deviceId, isActive: true } });
       if (deviceForWebhook?.webhookUrl) {
-        this.forwardIncomingWebhook(deviceForWebhook, payload).catch(() => {});
+        this.aiWebhookService.forwardIncomingWebhook(deviceForWebhook, payload).catch(() => {});
       }
 
-      // Resolve LID (@lid) to real phone number for whitelist/blacklist checks
-      // Priority: lidPhoneMap lookup → senderPn from payload → raw phone
-      let resolvedPhone = this.whatsappService.resolvePhoneFromLid(payload.deviceId, payload.phone);
-      if (resolvedPhone === payload.phone && payload.senderPn) {
-        resolvedPhone = payload.senderPn;
-      }
-      if (resolvedPhone !== payload.phone) {
-        this.logger.log(`[INCOMING] LID resolved: ${payload.phone} → ${resolvedPhone}`);
+      // For group messages, phone is already the group JID (@g.us) — no LID resolution needed.
+      // For individual messages, resolve LID to real phone number for whitelist/blacklist checks.
+      let resolvedPhone = payload.phone;
+      if (!payload.isGroup) {
+        resolvedPhone = this.whatsappService.resolvePhoneFromLid(payload.deviceId, payload.phone);
+        if (resolvedPhone === payload.phone && payload.senderPn) {
+          resolvedPhone = payload.senderPn;
+        }
+        if (resolvedPhone !== payload.phone) {
+          this.logger.log(`[INCOMING] LID resolved: ${payload.phone} → ${resolvedPhone}`);
+        }
       }
 
       if (this.isBlacklisted(payload.deviceId, resolvedPhone)) {
@@ -205,14 +194,20 @@ export class AIAgentService implements OnModuleInit {
         this.logger.warn(`[INCOMING] Device ${payload.deviceId} not found or inactive`);
         return;
       }
-      this.logger.log(`[INCOMING] Device found: ${device.deviceId}, status: ${device.status}`);
 
       // Always save message to conversation so CS can see it regardless of whitelist
       const isHuman = await this.conversationsService.isHumanTakeover(payload.deviceId, resolvedPhone);
+      // For groups: use groupName as contactName so the conversation list shows the group name, not the sender's name
+      const contactNameForConv = payload.isGroup ? (payload.groupName || payload.phone) : payload.senderName;
       const conv = await this.conversationsService.findOrCreate(
         payload.deviceId,
         resolvedPhone,
-        payload.senderName,
+        contactNameForConv,
+        {
+          isGroup: payload.isGroup,
+          groupId: payload.groupId,
+          groupName: payload.groupName,
+        },
       );
       await this.conversationsService.addMessage(
         conv.id,
@@ -222,14 +217,11 @@ export class AIAgentService implements OnModuleInit {
         undefined,
         payload.mediaUrl,
         payload.type !== 'text' ? payload.type : undefined,
+        payload.isGroup ? payload.senderName : undefined,
       );
-      this.logger.log(`[INCOMING] Message saved to conversation ${conv.id}`);
+      await this.conversationsService.incrementUnread(payload.deviceId, resolvedPhone);
 
-      // If human takeover, skip AI and stop here
-      if (isHuman) {
-        this.logger.log(`[INCOMING] Human takeover active for ${resolvedPhone}, skipping AI`);
-        return;
-      }
+      if (isHuman) return;
 
       // Whitelist check: only blocks AI auto-reply, message is already saved above
       if (!this.isWhitelisted(payload.deviceId, resolvedPhone)) {
@@ -237,206 +229,129 @@ export class AIAgentService implements OnModuleInit {
         this.logger.warn(`[INCOMING] AI SKIPPED - ${resolvedPhone} not in whitelist (devMode, ${wl.phones.length} allowed)`);
         return;
       }
-      this.logger.log(`[INCOMING] ACCEPTED - ${resolvedPhone} passed whitelist check`);
 
       const agent = await this.agentRepo.findOne({ where: { deviceId: payload.deviceId, enabled: true } });
       if (!agent) {
-        this.logger.warn(`[INCOMING] No AI agent found for device ${payload.deviceId}`);
+        this.logger.warn(`[INCOMING] No AI agent for device ${payload.deviceId}`);
         return;
       }
-      this.logger.log(`[INCOMING] AI Agent found: ${agent.model}, enabled: ${agent.enabled}`);
 
-      if (!this.isWithinOperatingHours(agent)) {
+      // Group AI reply gating
+      if (payload.isGroup) {
+        if (!agent.groupEnabled) {
+          this.logger.log(`[INCOMING] AI SKIPPED - group replies disabled for device ${payload.deviceId}`);
+          return;
+        }
+        // Allowed groups whitelist: match by group name (case-insensitive) so users don't need to know the JID
+        if (agent.allowedGroups?.length) {
+          const incomingName = (payload.groupName || '').toLowerCase().trim();
+          const allowed = agent.allowedGroups.some(g => g.toLowerCase().trim() === incomingName);
+          if (!allowed) {
+            this.logger.log(`[INCOMING] AI SKIPPED - group "${payload.groupName}" not in allowedGroups`);
+            return;
+          }
+        }
+        // Mention-only mode: only reply if bot is mentioned via phone or LID (WA Business uses LID for mentions)
+        if (agent.groupMentionOnly && payload.message) {
+          const devicePhone = device.phone || '';
+          const deviceLid = (device as any).selfLid || '';
+
+          // Auto-learn bot's LID from mentionedIds.
+          // Trigger when selfLid is unset or incorrectly set to the same value as phone.
+          const lidIsUnknown = !deviceLid || deviceLid === devicePhone;
+          if (lidIsUnknown && payload.mentionedIds?.length) {
+            const newLid = payload.mentionedIds.find(id => id !== devicePhone);
+            if (newLid) {
+              await this.deviceRepo.update({ deviceId: payload.deviceId }, { selfLid: newLid } as any);
+              Object.assign(device, { selfLid: newLid });
+              this.logger.log(`[MENTION] Auto-learned bot LID for ${payload.deviceId}: ${newLid}`);
+            }
+          }
+
+          // currentLid is updated in-memory by auto-learn above (if triggered)
+          const currentLid = (device as any).selfLid || '';
+          const mentionedInData = !!(
+            (devicePhone && payload.mentionedIds?.includes(devicePhone)) ||
+            (currentLid && payload.mentionedIds?.includes(currentLid))
+          );
+          const mentionedInText = !!(
+            (devicePhone && payload.message.includes(`@${devicePhone}`)) ||
+            (currentLid && payload.message.includes(`@${currentLid}`))
+          );
+          if (!mentionedInData && !mentionedInText) {
+            this.logger.log(`[INCOMING] AI SKIPPED - groupMentionOnly enabled and bot not mentioned`);
+            return;
+          }
+        }
+        // Prefix mode: only apply when groupMentionOnly is OFF (they are mutually exclusive)
+        if (!agent.groupMentionOnly && agent.groupPrefix && payload.message) {
+          if (!payload.message.trimStart().startsWith(agent.groupPrefix)) {
+            this.logger.log(`[INCOMING] AI SKIPPED - groupPrefix "${agent.groupPrefix}" not found`);
+            return;
+          }
+        }
+      }
+
+      if (!this.aiReplyService.isWithinOperatingHours(agent)) {
         if (agent.outsideHoursMessage) {
-          await this.sendReply(device, resolvedPhone, agent.outsideHoursMessage, agent);
+          await this.aiReplyService.sendReply(device, resolvedPhone, agent.outsideHoursMessage, agent, payload.isGroup);
         }
         return;
       }
 
-      this.logger.log(`[INCOMING] Conversation ID: ${conv.id}`);
-
-      if (this.isHandoffRequest(payload.message, agent.handoffKeywords)) {
-        this.logger.log(`[INCOMING] Handoff request detected!`);
-        await this.conversationsService.escalate(payload.deviceId, resolvedPhone);
-        const handoffMsg = 'Baik, saya akan hubungkan Anda dengan agen kami. Mohon tunggu sebentar ya 😊';
-        await this.sendReply(device, resolvedPhone, handoffMsg, agent);
-        await this.conversationsService.addMessage(conv.id, MessageRole.ASSISTANT, handoffMsg);
-
-        if (agent.handoffWebhookUrl) {
-          this.notifyHandoff(agent.handoffWebhookUrl, payload, conv.id).catch(() => {});
-        }
-        return;
+      // Burst aggregation: debounce AI reply by typingDelay seconds
+      const debounceKey = `${payload.deviceId}:${resolvedPhone}`;
+      const delayMs = (agent.typingDelay ?? 10) * 1000;
+      const existing = this.debounceTimers.get(debounceKey);
+      if (existing) {
+        clearTimeout(existing);
+        this.logger.log(`[DEBOUNCE] Reset timer for ${resolvedPhone} (${delayMs}ms)`);
       }
+      const timer = setTimeout(() => {
+        this.debounceTimers.delete(debounceKey);
+        this.aiReplyService.processAIReply(payload.deviceId, resolvedPhone, conv.id, device, agent, payload.isGroup).catch(err =>
+          this.logger.error(`[DEBOUNCE] processAIReply error: ${err.message}`),
+        );
+      }, delayMs);
+      this.debounceTimers.set(debounceKey, timer);
+      this.logger.log(`[DEBOUNCE] Timer set for ${resolvedPhone}, reply in ${delayMs}ms`);
 
-      const history = await this.conversationsService.getRecentMessages(conv.id, agent.contextWindow);
-      this.logger.log(`[INCOMING] History loaded: ${history.length} messages`);
-
-      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        {
-          role: 'system',
-          content: agent.systemPrompt || this.buildDefaultSystemPrompt(agent.persona || 'CS Assistant'),
-        },
-        ...history.slice(0, -1).map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        })),
-        { role: 'user', content: payload.message },
-      ];
-      this.logger.log(`[INCOMING] OpenAI messages prepared: ${messages.length} items`);
-
-      await this.whatsappService.markAsRead(payload.deviceId, resolvedPhone, payload.whatsappMessageId);
-
-      const typingDuration = this.calculateTypingDuration(payload.message.length, agent);
-      this.logger.log(`[INCOMING] Typing duration: ${typingDuration}ms`);
-      const typingPromise = this.whatsappService.sendTyping(payload.deviceId, resolvedPhone, typingDuration);
-
-      this.logger.log(`[OPENAI] Sending request to OpenAI...`);
-      this.logger.log(`[OPENAI] Model: ${agent.model || 'gpt-4o'}`);
-      this.logger.log(`[OPENAI] Temperature: ${agent.temperature}, MaxTokens: ${agent.maxTokens}`);
-      
-      const completion = await this.openai.chat.completions.create({
-        model: agent.model || 'gpt-4o',
-        messages,
-        temperature: agent.temperature,
-        max_tokens: agent.maxTokens,
-      });
-      
-      this.logger.log(`[OPENAI] Response received!`);
-
-      await typingPromise;
-
-      const reply = completion.choices[0]?.message?.content || '';
-      const tokenCount = completion.usage?.total_tokens || 0;
-      
-      this.logger.log(`[OPENAI] Reply content: "${reply.substring(0, 100)}..."`);
-      this.logger.log(`[OPENAI] Token count: ${tokenCount}`);
-
-      if (!reply) {
-        this.logger.warn(`[OPENAI] Empty reply received!`);
-        return;
-      }
-
-      this.logger.log(`[INCOMING] Sending AI reply...`);
-      await this.sendReply(device, resolvedPhone, reply, agent);
-      this.logger.log(`[INCOMING] Reply sent successfully!`);
-      
-      await this.conversationsService.addMessage(conv.id, MessageRole.ASSISTANT, reply, tokenCount, agent.model);
-      this.logger.log(`[INCOMING] AI reply saved to conversation`);
-      
     } catch (err) {
       this.logger.error(`[INCOMING] AI agent error for device ${payload.deviceId}: ${err.message}`);
       this.logger.error(`[INCOMING] Error stack: ${err.stack}`);
     }
   }
 
-  private async sendReply(device: Device, phone: string, message: string, agent: AIAgent): Promise<void> {
-    const maxRetries = 3;
-    const retryDelayMs = 3000;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await this.whatsappService.waitUntilConnected(device.deviceId, 12000);
-
-        this.logger.log(`[AI REPLY] Sending to ${phone} (attempt ${attempt}/${maxRetries}): "${message.substring(0, 50)}..."`);
-
-        if (agent.simulateTyping) {
-          const typingMs = this.calculateTypingDuration(message.length, agent);
-          await this.whatsappService.sendTyping(device.deviceId, phone, typingMs);
-        }
-
-        const messageId = await this.whatsappService.sendText(device.deviceId, {
-          phone,
-          message,
-          isGroup: false,
-        });
-
-        this.logger.log(`[AI REPLY] Message sent successfully. ID: ${messageId}`);
-        return;
-      } catch (error) {
-        this.logger.error(`[AI REPLY] Attempt ${attempt}/${maxRetries} failed to send to ${phone}: ${error.message}`);
-        if (attempt < maxRetries) {
-          this.logger.log(`[AI REPLY] Retrying in ${retryDelayMs}ms...`);
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-        } else {
-          throw error;
+  @Cron(CronExpression.EVERY_MINUTE)
+  async handleHandoffTimeout(): Promise<void> {
+    try {
+      const agents = await this.agentRepo.find({ where: { enabled: true } });
+      for (const agent of agents) {
+        const timeout = agent.handoffTimeout ?? 30;
+        if (!timeout) continue;
+        const timedOut = await this.conversationsService.findEscalatedTimedOut(agent.deviceId, timeout);
+        for (const conv of timedOut) {
+          await this.conversationsService.releaseToAI(agent.deviceId, conv.phone);
+          this.logger.log(`[AUTO-RELEASE] ${conv.phone} on device ${agent.deviceId} returned to AI after ${timeout}min inactivity`);
         }
       }
-    }
-  }
-
-  private isWithinOperatingHours(agent: AIAgent): boolean {
-    if (agent.alwaysOn) return true;
-    const now = dayjs().tz(agent.timezone || 'Asia/Jakarta');
-    const [startH, startM] = agent.operatingStart.split(':').map(Number);
-    const [endH, endM] = agent.operatingEnd.split(':').map(Number);
-
-    const currentMinutes = now.hour() * 60 + now.minute();
-    const startMinutes = startH * 60 + startM;
-    const endMinutes = endH * 60 + endM;
-
-    return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
-  }
-
-  private isHandoffRequest(message: string, keywords: string[]): boolean {
-    if (!keywords?.length) return false;
-    const lower = message.toLowerCase();
-    return keywords.some((kw) => lower.includes(kw.toLowerCase()));
-  }
-
-  private calculateTypingDuration(replyLength: number, agent: AIAgent): number {
-    const duration = replyLength * agent.typingDelayPerChar;
-    return Math.min(Math.max(duration, agent.minTypingDelay), agent.maxTypingDelay);
-  }
-
-  private buildDefaultSystemPrompt(persona: string): string {
-    return `Kamu adalah ${persona}, customer service yang ramah dan profesional. 
-Kamu membantu pelanggan dengan sopan, sabar, dan memberikan informasi yang akurat.
-Gunakan bahasa yang natural dan manusiawi, bukan seperti robot.
-Jika tidak tahu jawabannya, jujur saja dan tawarkan untuk menghubungkan dengan agen manusia.
-Balasan harus singkat, jelas, dan tidak bertele-tele. Gunakan emoji secukupnya agar terasa hangat.`;
-  }
-
-  private async forwardIncomingWebhook(device: Device, payload: WhatsAppMessage): Promise<void> {
-    if (!device.webhookUrl) return;
-    try {
-      const axios = await import('axios');
-      await axios.default.post(device.webhookUrl, {
-        phone: payload.phone,
-        senderName: payload.senderName,
-        message: payload.message || '',
-        type: payload.type,
-        mediaUrl: payload.mediaUrl || null,
-        isGroup: payload.isGroup,
-        groupId: payload.groupId || null,
-        groupName: payload.groupName || null,
-        deviceId: payload.deviceId,
-        whatsappMessageId: payload.whatsappMessageId,
-        timestamp: payload.timestamp,
-      }, {
-        timeout: 10000,
-        headers: { 'Content-Type': 'application/json' },
-      });
-      this.logger.log(`[WEBHOOK] Forwarded to ${device.webhookUrl}`);
     } catch (err) {
-      this.logger.warn(`[WEBHOOK] Failed to forward to ${device.webhookUrl}: ${err.message}`);
+      this.logger.error(`[AUTO-RELEASE] Cron error: ${err.message}`);
     }
-  }
-
-  private async notifyHandoff(webhookUrl: string, payload: WhatsAppMessage, conversationId: string): Promise<void> {
-    const axios = await import('axios');
-    await axios.default.post(webhookUrl, {
-      event: 'handoff',
-      conversationId,
-      deviceId: payload.deviceId,
-      phone: payload.phone,
-      senderName: payload.senderName,
-      lastMessage: payload.message,
-      timestamp: new Date().toISOString(),
-    }, { timeout: 10000 });
   }
 
   async getConfig(deviceId: string): Promise<AIAgent | null> {
     return this.agentRepo.findOne({ where: { deviceId } });
+  }
+
+  async updateGroupConfig(deviceId: string, dto: { groupEnabled?: boolean; allowedGroups?: string[]; groupMentionOnly?: boolean; groupPrefix?: string }): Promise<AIAgent> {
+    let agent = await this.agentRepo.findOne({ where: { deviceId } });
+    if (!agent) agent = this.agentRepo.create({ deviceId });
+    if (dto.groupEnabled !== undefined) agent.groupEnabled = dto.groupEnabled;
+    if (dto.allowedGroups !== undefined) agent.allowedGroups = dto.allowedGroups;
+    if (dto.groupMentionOnly !== undefined) agent.groupMentionOnly = dto.groupMentionOnly;
+    if (dto.groupPrefix !== undefined) agent.groupPrefix = dto.groupPrefix;
+    return this.agentRepo.save(agent);
   }
 
   async upsertConfig(deviceId: string, dto: Partial<AIAgent>): Promise<AIAgent> {
@@ -460,6 +375,11 @@ Balasan harus singkat, jelas, dan tidak bertele-tele. Gunakan emoji secukupnya a
     if (dto.typingDelayPerChar !== undefined) agent.typingDelayPerChar = dto.typingDelayPerChar;
     if (dto.minTypingDelay !== undefined) agent.minTypingDelay = dto.minTypingDelay;
     if (dto.maxTypingDelay !== undefined) agent.maxTypingDelay = dto.maxTypingDelay;
+    if (dto.aiProvider !== undefined) agent.aiProvider = dto.aiProvider;
+    if (dto.aiApiKey !== undefined) agent.aiApiKey = dto.aiApiKey ?? '';
+    if (dto.aiBaseUrl !== undefined) agent.aiBaseUrl = dto.aiBaseUrl ?? '';
+    if (dto.handoffTimeout !== undefined) agent.handoffTimeout = dto.handoffTimeout;
+    if (dto.typingDelay !== undefined) agent.typingDelay = dto.typingDelay;
     return this.agentRepo.save(agent);
   }
 }

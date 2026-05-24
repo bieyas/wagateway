@@ -1,11 +1,13 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Smartphone,
-  Users, LogOut, Menu, X, Wifi, ChevronRight, Download, Share, UsersRound,
+  Users, LogOut, Menu, X, Wifi, ChevronRight, Download, Share, UsersRound, Bell, MessageCircle,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth.store'
+import { unreadApi } from '@/lib/api'
 
 const nav = [
   { to: '/',              icon: LayoutDashboard, label: 'Dashboard',     color: 'text-violet-600', bg: 'bg-violet-50' },
@@ -23,10 +25,29 @@ export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<any>(null)
   const [showIosHint, setShowIosHint] = useState(false)
+  const [showBell, setShowBell] = useState(false)
   const { username, email, role, clearAuth } = useAuthStore()
   const navigate = useNavigate()
   const location = useLocation()
   const iosHintRef = useRef<HTMLDivElement>(null)
+  const bellRef = useRef<HTMLDivElement>(null)
+
+  const { data: unreadData } = useQuery({
+    queryKey: ['unread'],
+    queryFn: () => unreadApi.get(),
+    refetchInterval: 15000,
+    refetchIntervalInBackground: false,
+  })
+  const unreadTotal: number = (unreadData as any)?.data?.total || 0
+  const unreadConvs: any[] = (unreadData as any)?.data?.byConversation || []
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) setShowBell(false)
+    }
+    if (showBell) document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showBell])
 
   const pageTitle = pageTitles[location.pathname] || 'WA Gateway'
 
@@ -170,6 +191,53 @@ export default function AppLayout() {
 
           {/* Spacer */}
           <div className="flex-1" />
+
+          {/* Bell notification */}
+          <div className="relative" ref={bellRef}>
+            <button
+              onClick={() => setShowBell(v => !v)}
+              className="relative p-2 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors"
+            >
+              <Bell className="w-5 h-5" />
+              {unreadTotal > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+                  {unreadTotal > 99 ? '99+' : unreadTotal}
+                </span>
+              )}
+            </button>
+            {showBell && (
+              <div className="absolute right-0 top-11 z-50 bg-white rounded-xl shadow-xl border border-gray-100 w-80 py-1 max-h-96 overflow-y-auto">
+                <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-800">Pesan belum dibaca</span>
+                  {unreadTotal > 0 && (
+                    <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">{unreadTotal}</span>
+                  )}
+                </div>
+                {unreadConvs.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-sm text-gray-400">Tidak ada pesan belum dibaca</div>
+                ) : (
+                  unreadConvs.map((c: any) => (
+                    <button
+                      key={c.id}
+                      onClick={() => { setShowBell(false); navigate('/conversations') }}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left transition-colors"
+                    >
+                      <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center shrink-0">
+                        <MessageCircle className="w-4 h-4 text-orange-500" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">{c.contactName || c.phone}</p>
+                        <p className="text-xs text-gray-400 truncate">{c.phone}</p>
+                      </div>
+                      <span className="bg-red-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center shrink-0">
+                        {c.csUnreadCount}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Install PWA button */}
           {showInstallBtn && (

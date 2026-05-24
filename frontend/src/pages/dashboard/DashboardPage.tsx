@@ -1,16 +1,22 @@
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Smartphone, MessageSquare, Bot, Wifi, WifiOff, ArrowUpRight, Activity, Users } from 'lucide-react'
 import { deviceApi, chatApi, aiApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { useAuthStore } from '@/store/auth.store'
 import { truncate } from '@/lib/utils'
 
-function StatCard({ icon: Icon, label, value, sub, gradient, iconBg }: {
+function StatCard({ icon: Icon, label, value, sub, gradient, iconBg, onClick }: {
   icon: React.ElementType; label: string; value: string | number
-  sub?: string; gradient: string; iconBg: string
+  sub?: string; gradient: string; iconBg: string; onClick?: () => void
 }) {
   return (
-    <div className={`rounded-2xl p-5 text-white ${gradient} shadow-sm`}>
+    <div
+      onClick={onClick}
+      className={`rounded-2xl p-5 text-white ${gradient} shadow-sm transition-all duration-150 ${
+        onClick ? 'cursor-pointer hover:scale-[1.02] hover:shadow-md active:scale-[0.99]' : ''
+      }`}
+    >
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <p className="text-xs font-medium text-white/70 uppercase tracking-wide">{label}</p>
@@ -33,6 +39,7 @@ const STATUS_CONFIG: Record<string, { label: string; variant: 'success' | 'warni
 
 export default function DashboardPage() {
   const { deviceId, token } = useAuthStore()
+  const navigate = useNavigate()
   const { data: devRes } = useQuery({ queryKey: ['devices'], queryFn: () => deviceApi.list(), enabled: !!token })
   const { data: chatsRes } = useQuery({ queryKey: ['chats'], queryFn: () => chatApi.list(), enabled: !!token })
   const { data: aiRes } = useQuery({ queryKey: ['ai-config', deviceId], queryFn: () => aiApi.getConfig(deviceId!), enabled: !!token && !!deviceId })
@@ -88,20 +95,24 @@ export default function DashboardPage() {
         <StatCard icon={Smartphone} label="Total Device" value={devices.length}
           sub={`${devices.filter((d: any) => d.status === 'connected').length} terhubung`}
           gradient="bg-gradient-to-br from-violet-500 to-violet-700"
-          iconBg="bg-white/20" />
+          iconBg="bg-white/20"
+          onClick={() => navigate('/devices')} />
         <StatCard icon={MessageSquare} label="Percakapan" value={chats.length}
           sub={`${chats.filter((c: any) => c.isAIActive).length} aktif AI`}
           gradient="bg-gradient-to-br from-emerald-500 to-emerald-700"
-          iconBg="bg-white/20" />
+          iconBg="bg-white/20"
+          onClick={() => navigate('/conversations')} />
         <StatCard icon={Users} label="Human Takeover" value={chats.filter((c: any) => c.humanTakeover).length}
           sub="Menunggu agen manusia"
           gradient="bg-gradient-to-br from-purple-500 to-purple-700"
-          iconBg="bg-white/20" />
+          iconBg="bg-white/20"
+          onClick={() => navigate('/conversations?filter=takeover')} />
         <StatCard icon={Bot} label="AI Agent"
           value={aiConfig.enabled ? 'ON' : 'OFF'}
           sub={aiConfig.persona || 'Belum dikonfigurasi'}
           gradient={aiConfig.enabled ? 'bg-gradient-to-br from-pink-500 to-rose-600' : 'bg-gradient-to-br from-gray-400 to-gray-600'}
-          iconBg="bg-white/20" />
+          iconBg="bg-white/20"
+          onClick={() => deviceId && navigate(`/ai-agent/${deviceId}`)} />
       </div>
 
       {/* Recent Chats */}

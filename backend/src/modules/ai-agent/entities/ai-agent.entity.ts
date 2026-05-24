@@ -82,4 +82,31 @@ export class AIAgent extends BaseEntity {
 
   @Column({ default: 8000 })
   maxTypingDelay: number;
+
+  @Column({ default: false })
+  groupEnabled: boolean;
+
+  @Column({ type: 'simple-array', nullable: true })
+  allowedGroups: string[];
+
+  @Column({ default: true })
+  groupMentionOnly: boolean;
+
+  @Column({ nullable: true })
+  groupPrefix: string;
+
+  @Column({ nullable: true, default: 'openai' })
+  aiProvider: string;
+
+  @Column({ nullable: true })
+  aiApiKey: string;
+
+  @Column({ nullable: true })
+  aiBaseUrl: string;
+
+  @Column({ default: 30 })
+  handoffTimeout: number;
+
+  @Column({ default: 10 })
+  typingDelay: number;
 }

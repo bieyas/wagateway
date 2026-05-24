@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'],
+        // globPatterns already handles these
         manifest: {
           name: env.VITE_APP_NAME || 'WA Gateway',
           short_name: 'WA Gateway',
